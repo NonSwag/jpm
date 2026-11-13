@@ -1,0 +1,14 @@
+// jpm builds itself: `./bootstrap.sh` once, then `bin/jpm build` and `bin/jpm test`.
+{
+  "name": "jpm",
+  "version": "0.1.0",
+  "java": "21",
+  "main": "dev.jpm.cli.Main",
+  "runtime": {},
+  "test": {
+    "org.junit.jupiter:junit-jupiter": "5.11.4"
+  },
+  "scripts": {
+    "native": "scripts/native.sh"
+  }
+}

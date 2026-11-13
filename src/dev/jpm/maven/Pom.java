@@ -1,0 +1,238 @@
+package dev.jpm.maven;
+
+import dev.jpm.util.JpmException;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * The parts of an effective POM that matter for dependency resolution: parent inheritance, property
+ * interpolation, dependency management (including imported BOMs) and relocation.
+ */
+public final class Pom {
+    public record Dep(String group, String artifact, String version, String scope, boolean optional,
+                      String type, String classifier, Set<String> exclusions) {
+        public String key() { return group + ":" + artifact; }
+    }
+
+    public String group;
+    public String artifact;
+    public String version;
+    public String packaging = "jar";
+    public final Map<String, String> properties = new LinkedHashMap<>();
+    public final Map<String, Dep> management = new LinkedHashMap<>();
+    public final List<Dep> dependencies = new ArrayList<>();
+    /** Relocation target as group:artifact:version, or null. */
+    public String relocation;
+
+    /** Loads POMs and builds effective models, memoized. */
+    public static final class Loader {
+        private final MavenRepo repo;
+        private final Map<String, Pom> memo = new HashMap<>();
+
+        public Loader(MavenRepo repo) {
+            this.repo = repo;
+        }
+
+        public Pom load(String group, String artifact, String version) {
+            String key = group + ":" + artifact + ":" + version;
+            Pom cached = memo.get(key);
+            if (cached != null) return cached;
+            Pom p = build(group, artifact, version, new LinkedHashSet<>());
+            memo.put(key, p);
+            return p;
+        }
+
+        private Pom build(String group, String artifact, String version, Set<String> stack) {
+            String key = group + ":" + artifact + ":" + version;
+            if (!stack.add(key)) throw new JpmException("Cycle in POM parents: " + stack);
+            Path file = repo.require(group, artifact, version, null, "pom");
+            Element project = parseXml(file);
+            Pom pom = new Pom();
+            Pom parent = null;
+            Element parentEl = child(project, "parent");
+            if (parentEl != null) {
+                String pg = text(parentEl, "groupId"), pa = text(parentEl, "artifactId"), pv = text(parentEl, "version");
+                parent = memo.get(pg + ":" + pa + ":" + pv);
+                if (parent == null) {
+                    parent = build(pg, pa, pv, stack);
+                    memo.put(pg + ":" + pa + ":" + pv, parent);
+                }
+            }
+            pom.group = or(text(project, "groupId"), parent != null ? parent.group : group);
+            pom.artifact = or(text(project, "artifactId"), artifact);
+            pom.version = or(text(project, "version"), parent != null ? parent.version : version);
+            pom.packaging = or(text(project, "packaging"), "jar");
+
+            if (parent != null) pom.properties.putAll(parent.properties);
+            Element props = child(project, "properties");
+            if (props != null) {
+                for (Element e : children(props)) pom.properties.put(e.getTagName(), e.getTextContent().trim());
+            }
+            pom.properties.put("project.groupId", pom.group);
+            pom.properties.put("project.artifactId", pom.artifact);
+            pom.properties.put("project.version", pom.version);
+            pom.properties.put("pom.groupId", pom.group);
+            pom.properties.put("pom.version", pom.version);
+            pom.properties.put("version", pom.version);
+            pom.properties.put("groupId", pom.group);
+            if (parent != null) {
+                pom.properties.put("project.parent.version", parent.version);
+                pom.properties.put("project.parent.groupId", parent.group);
+                pom.properties.put("parent.version", parent.version);
+            }
+            for (String prop : List.of("java.version", "java.specification.version")) {
+                pom.properties.putIfAbsent(prop, System.getProperty(prop, "21"));
+            }
+
+            // Dependency management: parent first, then own entries, then imported BOMs (own entries win).
+            if (parent != null) pom.management.putAll(parent.management);
+            Element dm = child(project, "dependencyManagement");
+            List<Dep> imports = new ArrayList<>();
+            if (dm != null) {
+                Element deps = child(dm, "dependencies");
+                if (deps != null) {
+                    for (Element d : children(deps, "dependency")) {
+                        Dep dep = dep(d, pom.properties);
+                        if ("import".equals(dep.scope) && "pom".equals(dep.type)) imports.add(dep);
+                        else pom.management.put(mgmtKey(dep), dep);
+                    }
+                }
+            }
+            for (Dep bom : imports) {
+                if (bom.version == null) continue;
+                Pom b = load(bom.group, bom.artifact, bom.version);
+                for (Map.Entry<String, Dep> e : b.management.entrySet()) pom.management.putIfAbsent(e.getKey(), e.getValue());
+            }
+
+            Map<String, Dep> deps = new LinkedHashMap<>();
+            if (parent != null) for (Dep d : parent.dependencies) deps.put(mgmtKey(d), d);
+            Element depsEl = child(project, "dependencies");
+            if (depsEl != null) {
+                for (Element d : children(depsEl, "dependency")) {
+                    Dep dep = dep(d, pom.properties);
+                    deps.put(mgmtKey(dep), dep);
+                }
+            }
+            for (Dep d : deps.values()) {
+                Dep m = pom.management.get(mgmtKey(d));
+                String v = d.version != null ? d.version : m != null ? m.version : null;
+                String scope = d.scope != null ? d.scope : m != null && m.scope != null ? m.scope : "compile";
+                Set<String> excl = new LinkedHashSet<>(d.exclusions);
+                if (m != null) excl.addAll(m.exclusions);
+                pom.dependencies.add(new Dep(d.group, d.artifact, v, scope, d.optional, d.type, d.classifier, excl));
+            }
+
+            Element dist = child(project, "distributionManagement");
+            Element reloc = dist == null ? null : child(dist, "relocation");
+            if (reloc != null) {
+                pom.relocation = or(interp(text(reloc, "groupId"), pom.properties), pom.group) + ":"
+                        + or(interp(text(reloc, "artifactId"), pom.properties), pom.artifact) + ":"
+                        + or(interp(text(reloc, "version"), pom.properties), pom.version);
+            }
+            stack.remove(key);
+            return pom;
+        }
+    }
+
+    private static String mgmtKey(Dep d) {
+        return d.group + ":" + d.artifact + ":" + (d.type == null ? "jar" : d.type) + (d.classifier == null ? "" : ":" + d.classifier);
+    }
+
+    private static Dep dep(Element d, Map<String, String> props) {
+        Set<String> excl = new LinkedHashSet<>();
+        Element ex = child(d, "exclusions");
+        if (ex != null) {
+            for (Element e : children(ex, "exclusion")) {
+                excl.add(interp(text(e, "groupId"), props) + ":" + or(interp(text(e, "artifactId"), props), "*"));
+            }
+        }
+        String type = or(interp(text(d, "type"), props), "jar");
+        return new Dep(interp(text(d, "groupId"), props), interp(text(d, "artifactId"), props),
+                interp(text(d, "version"), props), interp(text(d, "scope"), props),
+                "true".equals(interp(text(d, "optional"), props)), type, interp(text(d, "classifier"), props), excl);
+    }
+
+    private static final Pattern PROP = Pattern.compile("\\$\\{([^}]+)}");
+
+    static String interp(String s, Map<String, String> props) {
+        if (s == null) return null;
+        for (int depth = 0; depth < 10 && s.contains("${"); depth++) {
+            Matcher m = PROP.matcher(s);
+            StringBuilder sb = new StringBuilder();
+            boolean changed = false;
+            while (m.find()) {
+                String v = props.get(m.group(1));
+                if (v != null) changed = true;
+                m.appendReplacement(sb, Matcher.quoteReplacement(v != null ? v : m.group(0)));
+            }
+            m.appendTail(sb);
+            s = sb.toString();
+            if (!changed) break;
+        }
+        return s;
+    }
+
+    private static String or(String a, String b) {
+        return a != null && !a.isEmpty() ? a : b;
+    }
+
+    // ---------------------------------------------------------------- XML
+
+    static Element parseXml(Path file) {
+        try {
+            DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
+            f.setNamespaceAware(false);
+            f.setExpandEntityReferences(false);
+            f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
+            f.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            DocumentBuilder b = f.newDocumentBuilder();
+            b.setErrorHandler(null);
+            Document doc = b.parse(file.toFile());
+            return doc.getDocumentElement();
+        } catch (Exception e) {
+            throw new JpmException("Could not parse " + file + ": " + e.getMessage());
+        }
+    }
+
+    static Element child(Element parent, String name) {
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) {
+            Node n = nl.item(i);
+            if (n instanceof Element e && e.getTagName().equals(name)) return e;
+        }
+        return null;
+    }
+
+    static List<Element> children(Element parent) {
+        List<Element> out = new ArrayList<>();
+        NodeList nl = parent.getChildNodes();
+        for (int i = 0; i < nl.getLength(); i++) if (nl.item(i) instanceof Element e) out.add(e);
+        return out;
+    }
+
+    static List<Element> children(Element parent, String name) {
+        List<Element> out = new ArrayList<>();
+        for (Element e : children(parent)) if (e.getTagName().equals(name)) out.add(e);
+        return out;
+    }
+
+    static String text(Element parent, String name) {
+        Element e = child(parent, name);
+        return e == null ? null : e.getTextContent().trim();
+    }
+}

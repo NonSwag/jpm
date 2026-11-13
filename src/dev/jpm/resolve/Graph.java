@@ -1,0 +1,178 @@
+package dev.jpm.resolve;
+
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+/** A resolved dependency graph: one version per package, with typed edges. */
+public final class Graph {
+
+    public enum Kind { MAVEN, GIT, LOCAL }
+
+    /** An edge to another package. {@code runtimeOnly} edges are left off compile classpaths. */
+    public record Edge(String target, boolean runtimeOnly, Set<String> exclusions) {
+        public String encode() {
+            StringBuilder sb = new StringBuilder(runtimeOnly ? "runtime" : "compile");
+            for (String e : new TreeSet<>(exclusions)) sb.append(" !").append(e);
+            return sb.toString();
+        }
+
+        public static Edge decode(String target, String s) {
+            String[] parts = s.trim().split("\\s+");
+            Set<String> ex = new LinkedHashSet<>();
+            for (int i = 1; i < parts.length; i++) if (parts[i].startsWith("!")) ex.add(parts[i].substring(1));
+            return new Edge(target, parts[0].equals("runtime"), ex);
+        }
+    }
+
+    public static final class Pkg {
+        public final String id;
+        public final Kind kind;
+        public String version;
+        /** Git only. */
+        public String commit;
+        public String tag;
+        /** Maven only: checksum of the jar. Null for POM-only packages. */
+        public String sha256;
+        /** False for packages that have no jar (Maven pom packaging). */
+        public boolean hasJar = true;
+        public final Map<String, Edge> deps = new TreeMap<>();
+        /** Git: source directory of the module (transient). Local: module directory. */
+        public Path dir;
+        /** Path of the jar or classes directory once fetched or built (transient). */
+        public Path artifact;
+
+        public Pkg(String id, Kind kind) {
+            this.id = id;
+            this.kind = kind;
+        }
+
+        public String group() {
+            return id.substring(0, id.indexOf(':'));
+        }
+
+        public String name() {
+            return id.substring(id.indexOf(':') + 1);
+        }
+
+        @Override
+        public String toString() {
+            return id + "@" + version;
+        }
+    }
+
+    public final Map<String, Pkg> pkgs = new TreeMap<>();
+
+    public Pkg get(String id) {
+        return pkgs.get(id);
+    }
+
+    public void put(Pkg p) {
+        pkgs.put(p.id, p);
+    }
+
+    public static boolean excluded(String id, Set<String> exclusions) {
+        if (exclusions.isEmpty()) return false;
+        int c = id.indexOf(':');
+        if (c < 0) return false;
+        String g = id.substring(0, c), a = id.substring(c + 1);
+        for (String e : exclusions) {
+            int ec = e.indexOf(':');
+            String eg = ec < 0 ? e : e.substring(0, ec), ea = ec < 0 ? "*" : e.substring(ec + 1);
+            if ((eg.equals("*") || eg.equals(g)) && (ea.equals("*") || ea.equals(a))) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Transitive closure from the given root edges, honoring exclusions along each path.
+     *
+     * @param compileOnly follow only compile edges (and only compile root edges)
+     * @return package ids in breadth-first order
+     */
+    public List<String> closure(Collection<Edge> roots, boolean compileOnly) {
+        Map<String, List<Set<String>>> seen = new HashMap<>();
+        LinkedHashSet<String> order = new LinkedHashSet<>();
+        Deque<Object[]> queue = new ArrayDeque<>();
+        for (Edge e : roots) {
+            if (compileOnly && e.runtimeOnly) continue;
+            queue.add(new Object[]{e.target, new LinkedHashSet<>(e.exclusions)});
+        }
+        while (!queue.isEmpty()) {
+            Object[] item = queue.poll();
+            String id = (String) item[0];
+            @SuppressWarnings("unchecked")
+            Set<String> ex = (Set<String>) item[1];
+            List<Set<String>> prior = seen.computeIfAbsent(id, k -> new ArrayList<>());
+            boolean covered = false;
+            for (Set<String> s : prior) if (ex.containsAll(s)) { covered = true; break; }
+            if (covered) continue;
+            prior.add(ex);
+            order.add(id);
+            Pkg p = pkgs.get(id);
+            if (p == null) continue;
+            for (Edge e : p.deps.values()) {
+                if (compileOnly && e.runtimeOnly) continue;
+                if (excluded(e.target, ex)) continue;
+                Set<String> next = new LinkedHashSet<>(ex);
+                next.addAll(e.exclusions);
+                queue.add(new Object[]{e.target, next});
+            }
+        }
+        return new ArrayList<>(order);
+    }
+
+    /** All paths (as id lists) from the roots to the target, for `jpm why`. */
+    public List<List<String>> paths(Map<String, Collection<Edge>> rootsByLabel, String target) {
+        List<List<String>> out = new ArrayList<>();
+        for (Map.Entry<String, Collection<Edge>> r : rootsByLabel.entrySet()) {
+            for (Edge e : r.getValue()) {
+                List<String> path = new ArrayList<>();
+                path.add(r.getKey());
+                walk(e.target, target, path, new LinkedHashSet<>(), out);
+            }
+        }
+        return out;
+    }
+
+    private void walk(String id, String target, List<String> path, Set<String> onPath, List<List<String>> out) {
+        if (out.size() > 50 || !onPath.add(id)) return;
+        path.add(id);
+        if (id.equals(target)) {
+            out.add(new ArrayList<>(path));
+        } else {
+            Pkg p = pkgs.get(id);
+            if (p != null) for (Edge e : p.deps.values()) walk(e.target, target, path, onPath, out);
+        }
+        path.remove(path.size() - 1);
+        onPath.remove(id);
+    }
+
+    /** Packages in dependency order (dependencies before dependents) restricted to the given ids. */
+    public List<Pkg> topo(Collection<String> ids) {
+        Set<String> want = new LinkedHashSet<>(ids);
+        List<Pkg> out = new ArrayList<>();
+        Set<String> done = new LinkedHashSet<>();
+        for (String id : want) visit(id, want, done, new LinkedHashSet<>(), out);
+        return out;
+    }
+
+    private void visit(String id, Set<String> want, Set<String> done, Set<String> stack, List<Pkg> out) {
+        if (done.contains(id) || !stack.add(id)) return;
+        Pkg p = pkgs.get(id);
+        if (p != null) for (Edge e : p.deps.values()) if (want.contains(e.target)) visit(e.target, want, done, stack, out);
+        stack.remove(id);
+        done.add(id);
+        if (p != null) out.add(p);
+    }
+}

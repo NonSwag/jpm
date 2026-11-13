@@ -1,0 +1,491 @@
+package dev.jpm.build;
+
+import dev.jpm.DepKey;
+import dev.jpm.Manifest;
+import dev.jpm.Project;
+import dev.jpm.maven.MavenRepo;
+import dev.jpm.resolve.GitModule;
+import dev.jpm.resolve.Graph;
+import dev.jpm.resolve.Install;
+import dev.jpm.resolve.Lockfile;
+import dev.jpm.resolve.Resolver;
+import dev.jpm.util.Fs;
+import dev.jpm.util.Hash;
+import dev.jpm.util.JpmException;
+import dev.jpm.util.Log;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+/**
+ * Turns a resolved graph into classpaths and build outputs: the project's own modules, Git dependencies
+ * (built from source) and patched Maven jars.
+ */
+public final class Builder {
+    public enum Cp { COMPILE, PROCESSOR, RUNTIME, TEST_COMPILE, TEST_RUNTIME }
+
+    public final Project project;
+    public final Graph graph;
+    public final MavenRepo repo;
+    private final Map<String, String> env;
+    private final Map<String, List<Path>> artifacts = new HashMap<>();
+    private final Set<String> building = new LinkedHashSet<>();
+    private final Map<String, Boolean> compiledModules = new HashMap<>();
+
+    public Builder(Project project, Graph graph, MavenRepo repo, Env.Mode mode) {
+        this.project = project;
+        this.graph = graph;
+        this.repo = repo;
+        this.env = Env.load(project.dir, mode);
+    }
+
+    public Map<String, String> env() {
+        return env;
+    }
+
+    public Jdk jdk(Manifest m) {
+        return Jdk.select(m.java, m.javaMajor(), false);
+    }
+
+    // ---------------------------------------------------------------- classpaths
+
+    public List<Path> classpath(Project.Module m, Cp kind) {
+        List<Graph.Edge> runtime = Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
+        List<Graph.Edge> dev = Resolver.rootEdges(m, Manifest.Scope.DEV);
+        List<Graph.Edge> test = Resolver.rootEdges(m, Manifest.Scope.TEST);
+        List<String> ids = new ArrayList<>();
+        switch (kind) {
+            case COMPILE -> {
+                ids.addAll(graph.closure(runtime, true));
+                ids.addAll(graph.closure(dev, false));
+            }
+            case PROCESSOR -> ids.addAll(graph.closure(dev, false));
+            case RUNTIME -> ids.addAll(graph.closure(runtime, false));
+            case TEST_COMPILE -> {
+                ids.addAll(graph.closure(runtime, true));
+                ids.addAll(graph.closure(dev, false));
+                ids.addAll(graph.closure(test, true));
+            }
+            case TEST_RUNTIME -> {
+                ids.addAll(graph.closure(runtime, false));
+                ids.addAll(graph.closure(test, false));
+            }
+        }
+        List<Path> out = new ArrayList<>();
+        for (String id : new LinkedHashSet<>(ids)) out.addAll(paths(id, m));
+        return Compiler.distinct(out);
+    }
+
+    /** Runtime dependency classpath without compiling the project's own modules (for scripts). */
+    public List<Path> classpathNoBuild(Project.Module m) {
+        List<Path> out = new ArrayList<>();
+        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), false)) {
+            Graph.Pkg p = graph.get(id);
+            if (p != null && p.kind == Graph.Kind.LOCAL) {
+                Project.Module mod = project.module(id.substring("workspace:".length()));
+                out.add(classesDir(mod));
+                if (Files.isDirectory(mod.dir.resolve("assets"))) out.add(mod.dir.resolve("assets"));
+            } else {
+                out.addAll(paths(id, m));
+            }
+        }
+        return Compiler.distinct(out);
+    }
+
+    /** Jars or directories for one package. */
+    public List<Path> paths(String id, Project.Module consumer) {
+        List<Path> cached = artifacts.get(id);
+        if (cached != null) return cached;
+        Graph.Pkg p = graph.get(id);
+        if (p == null) throw new JpmException("Internal error: " + id + " is not in the dependency graph. Run `jpm install`.");
+        List<Path> out = switch (p.kind) {
+            case LOCAL -> {
+                Project.Module mod = project.module(id.substring("workspace:".length()));
+                compileMain(mod);
+                List<Path> l = new ArrayList<>();
+                l.add(classesDir(mod));
+                if (Files.isDirectory(mod.dir.resolve("assets"))) l.add(mod.dir.resolve("assets"));
+                yield l;
+            }
+            case MAVEN -> p.hasJar ? List.of(mavenJar(p, consumer)) : List.of();
+            case GIT -> List.of(buildGit(p));
+        };
+        artifacts.put(id, out);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- the project's modules
+
+    public static Path classesDir(Project.Module m) {
+        return m.cacheDir().resolve("classes");
+    }
+
+    public static Path testClassesDir(Project.Module m) {
+        return m.cacheDir().resolve("test-classes");
+    }
+
+    public Path jarPath(Project.Module m) {
+        return m.dir.resolve("dist").resolve(m.name() + "-" + m.version() + ".jar");
+    }
+
+    /** Compiles a module's main sources (and its workspace dependencies first). */
+    public boolean compileMain(Project.Module m) {
+        Boolean done = compiledModules.get(m.name());
+        if (done != null) return done;
+        if (!building.add(m.id())) throw new JpmException("Cycle between workspace modules at " + m.name());
+        try {
+            List<Path> cp = classpath(m, Cp.COMPILE);
+            List<Path> proc = m.manifest.deps(Manifest.Scope.DEV).isEmpty() ? List.of() : classpath(m, Cp.PROCESSOR);
+            Jdk jdk = jdk(m.manifest);
+            int release = release(m.manifest, jdk);
+            List<Path> roots = new ArrayList<>();
+            roots.add(m.dir.resolve("src"));
+            List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
+            Path gen = m.cacheDir().resolve("generated");
+            if (!defs.isEmpty() || m.manifest.defineClass != null) {
+                String fqcn = Defines.className(m.manifest);
+                Path f = gen.resolve(fqcn.replace('.', '/') + ".java");
+                Fs.writeIfChanged(f, Defines.source(fqcn, defs, m.name(), m.version()));
+                roots.add(gen);
+            } else {
+                Fs.deleteTree(gen);
+            }
+            String key = inputsKey(cp, proc);
+            boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
+                    classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key));
+            if (ran) Log.step("Compiled", m.name() + " " + m.version() + Log.dim(" (" + jdk.id() + ", release " + release + ")"));
+            compiledModules.put(m.name(), ran);
+            return ran;
+        } finally {
+            building.remove(m.id());
+        }
+    }
+
+    /** Compiles and packages a module into {@code dist/}. */
+    public Path jar(Project.Module m) {
+        compileMain(m);
+        Path jar = jarPath(m);
+        Map<String, String> attrs = new LinkedHashMap<>();
+        if (!m.manifest.mains.isEmpty()) {
+            attrs.put("Main-Class", m.manifest.mains.getOrDefault("main", m.manifest.mains.values().iterator().next()));
+        }
+        attrs.put("Implementation-Title", m.name());
+        attrs.put("Implementation-Version", m.version());
+        List<Path> dirs = new ArrayList<>();
+        dirs.add(classesDir(m));
+        if (Files.isDirectory(m.dir.resolve("assets"))) dirs.add(m.dir.resolve("assets"));
+        Path stamp = m.cacheDir().resolve("jar.key");
+        String key = treeKey(dirs) + attrs;
+        if (Files.exists(jar) && Files.exists(stamp) && Fs.read(stamp).equals(key)) return jar;
+        Fs.mkdirs(jar.getParent());
+        Jars.write(jar, dirs, attrs);
+        Fs.write(stamp, key);
+        Log.step("Packaged", m.dir.relativize(jar).toString());
+        return jar;
+    }
+
+    /** Compiles test sources. Returns false if the module has no tests. */
+    public boolean compileTests(Project.Module m) {
+        Path testDir = m.dir.resolve("test");
+        if (Fs.files(testDir, ".java").isEmpty()) return false;
+        compileMain(m);
+        List<Path> cp = new ArrayList<>();
+        cp.add(classesDir(m));
+        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        cp.addAll(classpath(m, Cp.TEST_COMPILE));
+        List<Path> proc = m.manifest.deps(Manifest.Scope.DEV).isEmpty() ? List.of() : classpath(m, Cp.PROCESSOR);
+        Jdk jdk = jdk(m.manifest);
+        boolean ran = Compiler.compile(new Compiler.Request(m.name() + " tests", jdk, release(m.manifest, jdk), List.of(testDir),
+                cp, proc, testClassesDir(m), m.cacheDir().resolve("test-classes.state.json"), m.manifest.javacArgs,
+                inputsKey(cp, proc) + treeKey(List.of(classesDir(m)))));
+        if (ran) Log.step("Compiled", m.name() + " tests");
+        return true;
+    }
+
+    public List<Path> testRuntimeClasspath(Project.Module m) {
+        List<Path> cp = new ArrayList<>();
+        cp.add(testClassesDir(m));
+        Path res = m.dir.resolve("test").resolve("resources");
+        if (Files.isDirectory(res)) cp.add(res);
+        cp.add(classesDir(m));
+        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        cp.addAll(classpath(m, Cp.TEST_RUNTIME));
+        return Compiler.distinct(cp);
+    }
+
+    public List<Path> runtimeClasspath(Project.Module m) {
+        List<Path> cp = new ArrayList<>();
+        cp.add(classesDir(m));
+        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        cp.addAll(classpath(m, Cp.RUNTIME));
+        return Compiler.distinct(cp);
+    }
+
+    private static int release(Manifest m, Jdk jdk) {
+        Integer t = m.targetMajor();
+        int release = t == null ? jdk.major() : t;
+        if (release > jdk.major()) {
+            throw new JpmException(m.file + ": target " + release + " needs JDK " + release + " or newer, but " + jdk.id() + " was selected");
+        }
+        return release;
+    }
+
+    /** Cache key part for a classpath: jar checksums by path, directories by their content stamp. */
+    private String inputsKey(List<Path> cp, List<Path> proc) {
+        Hash h = new Hash();
+        for (Path p : cp) h.add("cp " + p + " " + stamp(p));
+        for (Path p : proc) h.add("proc " + p + " " + stamp(p));
+        return h.hex();
+    }
+
+    private static String stamp(Path p) {
+        try {
+            if (Files.isDirectory(p)) return "dir";
+            return Files.size(p) + ":" + Files.getLastModifiedTime(p).toMillis();
+        } catch (IOException e) {
+            return "missing";
+        }
+    }
+
+    /** Content key of directory trees: relative names, sizes and modification times. */
+    static String treeKey(List<Path> dirs) {
+        Hash h = new Hash();
+        for (Path d : dirs) {
+            for (Path f : Fs.files(d, null)) {
+                try {
+                    h.add(Fs.slash(d.relativize(f)) + " " + Files.size(f) + " " + Files.getLastModifiedTime(f).toMillis());
+                } catch (IOException e) {
+                    h.add(f.toString());
+                }
+            }
+        }
+        return h.hex();
+    }
+
+    // ---------------------------------------------------------------- Maven jars and patches
+
+    private Path mavenJar(Graph.Pkg p, Project.Module consumer) {
+        Path jar = p.artifact != null ? p.artifact : repo.require(p.group(), p.name(), p.version, null, "jar");
+        Manifest owner = patchOwner(p.id);
+        if (owner == null) return jar;
+        Path patch = owner.dir().resolve(owner.patches.get(p.id));
+        if (!Files.exists(patch)) throw new JpmException(owner.file + ": patch file " + owner.patches.get(p.id) + " for " + p.id + " does not exist");
+        String key = new Hash().add(Hash.sha256(jar)).add(Hash.sha256(Fs.read(patch))).hex().substring(0, 24);
+        Path out = Fs.home().resolve("patched").resolve(key).resolve(p.name() + "-" + p.version + "-patched.jar");
+        if (Files.exists(out)) return out;
+        Log.step("Patching", p.id + " " + p.version);
+        Path sources = repo.fetch(p.group(), p.name(), p.version, "sources", "jar");
+        if (sources == null) throw new JpmException(p.id + " " + p.version + " has no sources jar, so the patch cannot be applied");
+        Path work = out.getParent().resolve("src");
+        Fs.deleteTree(work);
+        Jars.extract(sources, work);
+        Patches.apply(work, patch, p.id, p.version);
+        Set<String> touched = Patches.touched(patch);
+        List<Path> javaFiles = new ArrayList<>();
+        Path overlay = out.getParent().resolve("overlay");
+        Fs.deleteTree(overlay);
+        Fs.mkdirs(overlay);
+        Set<String> dropPrefixes = new LinkedHashSet<>();
+        for (String t : touched) {
+            Path f = work.resolve(t);
+            if (t.endsWith(".java")) {
+                if (Files.exists(f)) javaFiles.add(f);
+                dropPrefixes.add(t.substring(0, t.length() - 5));
+            } else if (Files.exists(f)) {
+                Fs.write(overlay.resolve(t), "");
+                try {
+                    Files.copy(f, overlay.resolve(t), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException e) {
+                    throw new JpmException(e.getMessage());
+                }
+            }
+        }
+        if (!javaFiles.isEmpty()) {
+            // Recompile only the changed classes against the original jar and its dependencies.
+            List<Graph.Edge> self = List.of(new Graph.Edge(p.id, false, Set.of()));
+            List<Path> cp = new ArrayList<>();
+            cp.add(jar);
+            for (String id : graph.closure(self, false)) if (!id.equals(p.id)) cp.addAll(paths(id, consumer));
+            Jdk jdk = consumer != null ? jdk(consumer.manifest) : Jdk.select(null, null, false);
+            int release = Math.max(8, Math.min(jdk.major(), classRelease(jar)));
+            Path srcRoot = out.getParent().resolve("changed");
+            Fs.deleteTree(srcRoot);
+            for (Path f : javaFiles) {
+                Path rel = work.relativize(f);
+                Path target = srcRoot.resolve(rel.toString());
+                Fs.mkdirs(target.getParent());
+                try {
+                    Files.copy(f, target);
+                } catch (IOException e) {
+                    throw new JpmException(e.getMessage());
+                }
+            }
+            Compiler.compile(new Compiler.Request("patch " + p.id, jdk, release, List.of(srcRoot), cp, List.of(), overlay,
+                    out.getParent().resolve("state.json"), List.of("-nowarn"), key));
+        }
+        Jars.rewrite(jar, out, name -> {
+            for (String d : dropPrefixes) {
+                if (name.equals(d + ".class") || (name.startsWith(d + "$") && name.endsWith(".class"))) return true;
+            }
+            return false;
+        }, overlay);
+        return out;
+    }
+
+    /** Bytecode level of the first class in a jar (e.g. 52 gives 8). */
+    private static int classRelease(Path jar) {
+        try (ZipFile zf = new ZipFile(jar.toFile())) {
+            var en = zf.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry e = en.nextElement();
+                if (!e.getName().endsWith(".class") || e.getName().startsWith("META-INF/")) continue;
+                try (InputStream in = zf.getInputStream(e)) {
+                    byte[] h = in.readNBytes(8);
+                    return ((h[6] & 0xff) << 8 | (h[7] & 0xff)) - 44;
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return 8;
+    }
+
+    private Manifest patchOwner(String id) {
+        for (Project.Module m : project.modules) if (m.manifest.patches.containsKey(id)) return m.manifest;
+        if (project.root.patches.containsKey(id)) return project.root;
+        return null;
+    }
+
+    // ---------------------------------------------------------------- Git dependencies
+
+    private Path buildGit(Graph.Pkg p) {
+        if (!building.add(p.id)) throw new JpmException("Dependency cycle through " + p.id);
+        try {
+            GitModule mod = GitModule.locate(DepKey.parse(p.id), p.commit);
+            Path src = mod.checkout();
+
+            Manifest owner = patchOwner(p.id);
+            String patchHash = "";
+            if (owner != null) {
+                Path patch = owner.dir().resolve(owner.patches.get(p.id));
+                patchHash = Hash.sha256(Fs.read(patch));
+                Path patched = Fs.home().resolve("git-patched").resolve(Patches.safeName(p.id))
+                        .resolve(p.commit.substring(0, 12) + "-" + patchHash.substring(0, 12));
+                if (!Files.isDirectory(patched.resolve(".jpm-complete"))) {
+                    Log.step("Patching", p.id + " " + p.version);
+                    Patches.applyTo(src, patched, patch, p.id, p.version);
+                    Fs.mkdirs(patched.resolve(".jpm-complete"));
+                }
+                src = patched;
+            }
+
+            // Compile classpath from this project's graph, so versions agree with ours.
+            List<Graph.Edge> edges = new ArrayList<>(p.deps.values());
+            List<Path> cp = new ArrayList<>();
+            for (String id : graph.closure(edges, true)) cp.addAll(paths(id, null));
+            List<Path> proc = List.of();
+            List<Manifest.Dependency> devDeps = mod.manifest().deps(Manifest.Scope.DEV);
+            if (!devDeps.isEmpty()) {
+                proc = buildToolClasspath(p, mod, devDeps);
+                cp.addAll(proc);
+            }
+            cp = Compiler.distinct(cp);
+
+            Manifest topConsumer = project.root.isWorkspaceRoot() ? null : project.root;
+            Map<String, Object> provided = null;
+            for (Project.Module m : project.modules) {
+                Map<String, Object> v = m.manifest.libraryDefines.get(p.id);
+                if (v != null) { provided = v; topConsumer = m.manifest; break; }
+            }
+            if (topConsumer == null && !project.modules.isEmpty()) topConsumer = project.modules.get(0).manifest;
+            List<Defines.Value> defs = Defines.resolve(mod.manifest(), p.id, provided, topConsumer, env);
+
+            Manifest consumerManifest = project.modules.get(0).manifest;
+            Jdk jdk = jdk(consumerManifest);
+            Integer t = mod.manifest().targetMajor();
+            int release = t == null ? jdk.major() : t;
+            if (release > jdk.major()) {
+                throw new JpmException(p.id + " targets Java " + release + ", but this project builds with " + jdk.id());
+            }
+
+            Hash kh = new Hash().add(p.id).add(p.commit).add(patchHash).add(jdk.id()).add(Integer.toString(release));
+            for (Defines.Value v : defs) kh.add(v.name() + "=" + v.value());
+            for (Path c : cp) kh.add(c.toString()).add(stamp(c));
+            String key = kh.hex().substring(0, 24);
+            Path buildDir = Fs.home().resolve("builds").resolve(Patches.safeName(p.id)).resolve(key);
+            String artifact = DepKey.parse(p.id).mavenArtifact();
+            Path jar = buildDir.resolve(artifact + "-" + p.version + ".jar");
+            if (Files.exists(jar)) return jar;
+
+            Log.step("Building", p.id + " " + p.version + Log.dim(" (" + p.commit.substring(0, 7) + ")"));
+            List<Path> roots = new ArrayList<>();
+            roots.add(src.resolve("src"));
+            if (!defs.isEmpty() || mod.manifest().defineClass != null) {
+                String fqcn = Defines.className(mod.manifest());
+                Path gen = buildDir.resolve("generated");
+                Fs.write(gen.resolve(fqcn.replace('.', '/') + ".java"), Defines.source(fqcn, defs, mod.manifest().name, p.version));
+                roots.add(gen);
+            }
+            Path classes = buildDir.resolve("classes");
+            Compiler.compile(new Compiler.Request(p.id, jdk, release, roots, cp, proc, classes,
+                    buildDir.resolve("state.json"), mod.manifest().javacArgs, key));
+            List<Path> dirs = new ArrayList<>();
+            dirs.add(classes);
+            if (Files.isDirectory(src.resolve("assets"))) dirs.add(src.resolve("assets"));
+            Map<String, String> attrs = new LinkedHashMap<>();
+            if (!mod.manifest().mains.isEmpty()) attrs.put("Main-Class", mod.manifest().mains.values().iterator().next());
+            attrs.put("Implementation-Title", p.id);
+            attrs.put("Implementation-Version", p.version);
+            attrs.put("Git-Commit", p.commit);
+            Jars.write(jar, dirs, attrs);
+            return jar;
+        } finally {
+            building.remove(p.id);
+        }
+    }
+
+    /**
+     * Build-only dependencies of a Git dependency (its {@code dev} scope). They never reach this project's
+     * classpath, so they are resolved on their own, preferring the versions in that repository's lockfile.
+     */
+    private List<Path> buildToolClasspath(Graph.Pkg p, GitModule mod, List<Manifest.Dependency> devDeps) {
+        List<Resolver.Root> roots = new ArrayList<>();
+        for (Manifest.Dependency d : devDeps) roots.add(new Resolver.Root(p.id, d.key(), d.spec()));
+        Graph prev = null;
+        String lockText = dev.jpm.git.GitRepo.of(DepKey.parse(p.id)).show(p.commit, Manifest.LOCK);
+        if (lockText != null) {
+            try {
+                Path tmp = Files.createTempFile("jpm-lock", ".lock");
+                Files.writeString(tmp, lockText);
+                Lockfile lf = Lockfile.read(tmp);
+                Files.deleteIfExists(tmp);
+                if (lf != null) prev = lf.graph;
+            } catch (IOException | JpmException e) {
+                Log.debug("ignoring lockfile of " + p.id + ": " + e.getMessage());
+            }
+        }
+        return resolveTool(roots, prev);
+    }
+
+    /** Resolves and fetches a standalone set of dependencies, returning their jars. */
+    public List<Path> resolveTool(List<Resolver.Root> roots, Graph prev) {
+        Graph g = new Resolver(roots, repo, prev).resolve();
+        Install.fetch(g, repo);
+        List<Graph.Edge> edges = new ArrayList<>();
+        for (Resolver.Root r : roots) edges.add(new Graph.Edge(Resolver.idOf(r.key()), false, Set.of()));
+        Builder sub = new Builder(project, g, repo, Env.Mode.PRODUCTION);
+        List<Path> out = new ArrayList<>();
+        for (String id : g.closure(edges, false)) out.addAll(sub.paths(id, null));
+        return out;
+    }
+}

@@ -1,0 +1,705 @@
+package dev.jpm.cli;
+
+import dev.jpm.DepKey;
+import dev.jpm.Manifest;
+import dev.jpm.Project;
+import dev.jpm.build.Builder;
+import dev.jpm.build.Compiler;
+import dev.jpm.build.Env;
+import dev.jpm.build.Jars;
+import dev.jpm.build.Jdk;
+import dev.jpm.build.Patches;
+import dev.jpm.build.Scripts;
+import dev.jpm.build.TestRunner;
+import dev.jpm.git.GitRepo;
+import dev.jpm.json.Jsonc;
+import dev.jpm.json.JsoncEdit;
+import dev.jpm.maven.MavenRepo;
+import dev.jpm.resolve.GitModule;
+import dev.jpm.resolve.Graph;
+import dev.jpm.resolve.Install;
+import dev.jpm.resolve.Resolver;
+import dev.jpm.util.Exec;
+import dev.jpm.util.Fs;
+import dev.jpm.util.JpmException;
+import dev.jpm.util.Log;
+import dev.jpm.version.MavenRange;
+import dev.jpm.version.NpmRange;
+import dev.jpm.version.Version;
+import dev.jpm.version.VersionSpec;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+/** Implementations of the CLI commands. */
+final class Commands {
+    private final Path cwd = Path.of("").toAbsolutePath();
+
+    // ---------------------------------------------------------------- helpers
+
+    private static boolean flag(List<String> args, String... names) {
+        boolean found = false;
+        for (String n : names) found |= args.remove(n);
+        return found;
+    }
+
+    private static String option(List<String> args, String name) {
+        for (int i = 0; i < args.size(); i++) {
+            String a = args.get(i);
+            if (a.equals(name) && i + 1 < args.size()) {
+                args.remove(i);
+                return args.remove(i);
+            }
+            if (a.startsWith(name + "=")) {
+                args.remove(i);
+                return a.substring(name.length() + 1);
+            }
+        }
+        return null;
+    }
+
+    /** Splits off everything after "--". */
+    private static List<String> passthrough(List<String> args) {
+        int i = args.indexOf("--");
+        if (i < 0) return new ArrayList<>();
+        List<String> rest = new ArrayList<>(args.subList(i + 1, args.size()));
+        args.subList(i, args.size()).clear();
+        return rest;
+    }
+
+    private static void noMoreFlags(List<String> args) {
+        for (String a : args) if (a.startsWith("-")) throw new JpmException("Unknown option " + a);
+    }
+
+    private record Ctx(Project project, MavenRepo repo, Graph graph) {
+        Builder builder(Env.Mode mode) {
+            return new Builder(project, graph, repo, mode);
+        }
+    }
+
+    private Ctx open(boolean frozen) {
+        Project p = Project.find(cwd);
+        MavenRepo repo = new MavenRepo(p.root.repositories);
+        Graph g = Install.run(p, repo, new Install.Options(frozen, false, Set.of(), true));
+        return new Ctx(p, repo, g);
+    }
+
+    /** Modules a command applies to: the one at the working directory, or all of them from the workspace root. */
+    private List<Project.Module> targets(Project p, List<String> names) {
+        if (!names.isEmpty()) {
+            List<Project.Module> out = new ArrayList<>();
+            for (String n : names) {
+                Project.Module m = p.module(n);
+                if (m == null) throw new JpmException("No module named \"" + n + "\"");
+                out.add(m);
+            }
+            return out;
+        }
+        Project.Module here = p.moduleAt(cwd);
+        if (here != null) return List.of(here);
+        return p.buildOrder();
+    }
+
+    private Project.Module single(Project p, String what) {
+        Project.Module here = p.moduleAt(cwd);
+        if (here != null) return here;
+        List<Project.Module> withMain = p.modules.stream().filter(m -> !m.manifest.mains.isEmpty()).toList();
+        if (withMain.size() == 1 && what.equals("run")) return withMain.get(0);
+        throw new JpmException("This is a workspace; run `jpm " + what + "` inside a module (" + String.join(", ",
+                p.modules.stream().map(Project.Module::relDir).toList()) + ")");
+    }
+
+    // ---------------------------------------------------------------- init
+
+    int init(List<String> args) {
+        noMoreFlags(args);
+        if (Files.exists(cwd.resolve(Manifest.FILE))) throw new JpmException(Manifest.FILE + " already exists here");
+        String name = args.isEmpty() ? cwd.getFileName().toString() : args.get(0);
+        name = name.replaceAll("[^A-Za-z0-9._-]", "-").replaceAll("^[^A-Za-z0-9]+", "");
+        if (name.isEmpty()) name = "app";
+        String pkg = name.toLowerCase().replaceAll("[^a-z0-9]", "");
+        if (pkg.isEmpty() || !Character.isLetter(pkg.charAt(0))) pkg = "app" + pkg;
+        Integer major = null;
+        try {
+            major = Jdk.select(null, null, false).major();
+        } catch (JpmException ignored) {
+        }
+        String manifest = """
+                {
+                  "name": "%s",
+                  "version": "0.1.0",
+                  %s"main": "%s.App",
+                  "runtime": {},
+                  "test": {}
+                }
+                """.formatted(name, major == null ? "" : "\"java\": \"" + major + "\",\n  ", pkg);
+        Fs.write(cwd.resolve(Manifest.FILE), manifest);
+        Path app = cwd.resolve("src").resolve(pkg).resolve("App.java");
+        if (!Files.exists(app)) {
+            Fs.write(app, """
+                    package %s;
+
+                    public class App {
+                        public static String greeting() {
+                            return "Hello from %s!";
+                        }
+
+                        public static void main(String[] args) {
+                            System.out.println(greeting());
+                        }
+                    }
+                    """.formatted(pkg, name));
+        }
+        Path test = cwd.resolve("test").resolve(pkg).resolve("AppTest.java");
+        if (!Files.exists(test)) {
+            Fs.write(test, """
+                    package %s;
+
+                    import static org.junit.jupiter.api.Assertions.assertEquals;
+
+                    import org.junit.jupiter.api.Test;
+
+                    class AppTest {
+                        @Test
+                        void greets() {
+                            assertEquals("Hello from %s!", App.greeting());
+                        }
+                    }
+                    """.formatted(pkg, name));
+        }
+        Path gi = cwd.resolve(".gitignore");
+        String ignore = ".cache/\ndist/\n.env.local\n";
+        if (!Files.exists(gi)) Fs.write(gi, ignore);
+        Log.step("Created", Manifest.FILE + ", src/" + pkg + "/App.java and test/" + pkg + "/AppTest.java");
+        Log.info("Next: `jpm start` to run it, `jpm test` to test it.");
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- add / remove
+
+    private record DepArg(DepKey key, String spec) {}
+
+    static DepArg parseDepArg(String s) {
+        String keyPart = s, spec = null;
+        int hash = s.indexOf('#');
+        int at = s.indexOf('@');
+        if (hash > 0 && (at < 0 || hash < at)) {
+            keyPart = s.substring(0, hash);
+            spec = s.substring(hash);
+        } else if (at > 0) {
+            keyPart = s.substring(0, at);
+            spec = s.substring(at + 1);
+        } else if (!s.startsWith("github:") && !s.startsWith("gitlab:") && !s.startsWith("codeberg:")
+                && !s.startsWith("workspace:") && s.chars().filter(c -> c == ':').count() == 2) {
+            int last = s.lastIndexOf(':');
+            keyPart = s.substring(0, last);
+            spec = s.substring(last + 1);
+        }
+        return new DepArg(DepKey.parse(keyPart), spec == null || spec.isBlank() ? null : spec);
+    }
+
+    private String latestSpec(MavenRepo repo, DepKey key) {
+        if (key.isMaven()) {
+            List<Version> all = repo.versions(key.group(), key.artifact());
+            Version best = null;
+            for (Version v : all) if (!v.isPreRelease() && !v.isSnapshot() && (best == null || v.compareTo(best) > 0)) best = v;
+            if (best == null) best = all.get(all.size() - 1);
+            return best.toString();
+        }
+        if (key.isGit()) {
+            GitRepo git = GitRepo.of(key);
+            Map<String, String> tags = git.tags();
+            Version best = null;
+            for (String t : tags.keySet()) {
+                String v = tagVersion(key, t, tags.keySet());
+                if (v == null) continue;
+                Version vv = Version.of(v);
+                if (!vv.isPreRelease() && (best == null || vv.compareTo(best) > 0)) best = vv;
+            }
+            if (best != null) return "^" + best;
+            return "#" + git.defaultBranch();
+        }
+        return "*";
+    }
+
+    private static String tagVersion(DepKey key, String tag, Collection<String> all) {
+        String module = key.module();
+        boolean prefixed = module != null && all.stream().anyMatch(t -> t.startsWith(module + "/"));
+        String v = tag;
+        if (prefixed) {
+            if (!tag.startsWith(module + "/")) return null;
+            v = tag.substring(module.length() + 1);
+        } else if (tag.contains("/")) return null;
+        if (v.startsWith("v")) v = v.substring(1);
+        return v.matches("\\d+(\\.\\d+){0,2}(-[0-9A-Za-z.-]+)?") ? v : null;
+    }
+
+    int add(List<String> args) {
+        boolean dev = flag(args, "--dev", "-D");
+        boolean test = flag(args, "--test", "-T");
+        boolean global = flag(args, "-g", "--global");
+        noMoreFlags(args);
+        if (args.isEmpty()) throw new JpmException("Usage: jpm add <dependency>[@version] [--dev | --test]");
+        if (dev && test) throw new JpmException("Choose one of --dev and --test");
+        if (global) return addGlobal(args);
+        Manifest.Scope scope = dev ? Manifest.Scope.DEV : test ? Manifest.Scope.TEST : Manifest.Scope.RUNTIME;
+        Project p = Project.find(cwd);
+        Project.Module m = single(p, "add");
+        MavenRepo repo = new MavenRepo(p.root.repositories);
+        String original = Fs.read(m.manifest.file);
+        String src = original;
+        for (String a : args) {
+            DepArg d = parseDepArg(a);
+            if (d.key.isWorkspace() && p.module(d.key.artifact()) == null) {
+                throw new JpmException("No workspace module named \"" + d.key.artifact() + "\"");
+            }
+            String spec = d.spec != null ? d.spec : d.key.isWorkspace() ? "*" : latestSpec(repo, d.key);
+            if (d.key.isMaven()) {
+                try {
+                    MavenRange.parse(spec);
+                } catch (IllegalArgumentException e) {
+                    throw new JpmException(e.getMessage());
+                }
+            }
+            for (Manifest.Scope s : Manifest.Scope.values()) {
+                if (s != scope) src = JsoncEdit.remove(src, List.of(s.key), d.key.toString());
+            }
+            src = JsoncEdit.set(src, List.of(scope.key), d.key.toString(), Jsonc.quote(spec));
+            Log.step("Adding", d.key + " " + spec + (scope == Manifest.Scope.RUNTIME ? "" : " (" + scope.key + ")"));
+        }
+        Fs.write(m.manifest.file, src);
+        try {
+            Project fresh = Project.find(cwd);
+            Install.run(fresh, repo, new Install.Options(false, false, Set.of(), false));
+        } catch (JpmException e) {
+            Fs.write(m.manifest.file, original);
+            throw new JpmException(e.getMessage() + "\n" + Manifest.FILE + " was left unchanged.");
+        }
+        return 0;
+    }
+
+    int remove(List<String> args) {
+        boolean global = flag(args, "-g", "--global");
+        noMoreFlags(args);
+        if (args.isEmpty()) throw new JpmException("Usage: jpm remove <dependency>");
+        if (global) return removeGlobal(args);
+        Project p = Project.find(cwd);
+        Project.Module m = single(p, "remove");
+        String src = Fs.read(m.manifest.file);
+        for (String a : args) {
+            DepKey key = parseDepArg(a).key;
+            boolean found = false;
+            for (Manifest.Scope s : Manifest.Scope.values()) {
+                String next = JsoncEdit.remove(src, List.of(s.key), key.toString());
+                if (!next.equals(src)) { found = true; src = next; }
+            }
+            if (!found) throw new JpmException(key + " is not a dependency in " + m.manifest.file);
+            Log.step("Removing", key.toString());
+        }
+        Fs.write(m.manifest.file, src);
+        Project fresh = Project.find(cwd);
+        Install.run(fresh, new MavenRepo(fresh.root.repositories), new Install.Options(false, false, Set.of(), false));
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- install / update / outdated / why
+
+    int install(List<String> args) {
+        boolean frozen = flag(args, "--frozen", "--frozen-lockfile");
+        noMoreFlags(args);
+        Project p = Project.find(cwd);
+        String before = Files.exists(p.lockFile()) ? Fs.read(p.lockFile()) : null;
+        Graph g = Install.run(p, new MavenRepo(p.root.repositories), new Install.Options(frozen, false, Set.of(), false));
+        if (before != null && before.equals(Fs.read(p.lockFile()))) {
+            long n = g.pkgs.values().stream().filter(x -> x.kind != Graph.Kind.LOCAL).count();
+            Log.step("Up to date", n + " package" + (n == 1 ? "" : "s") + " in " + Manifest.LOCK);
+        }
+        return 0;
+    }
+
+    int update(List<String> args) {
+        boolean latest = flag(args, "--latest");
+        noMoreFlags(args);
+        Project p = Project.find(cwd);
+        MavenRepo repo = new MavenRepo(p.root.repositories);
+        repo.setRefreshMetadata(true);
+        Set<String> only = new LinkedHashSet<>();
+        for (String a : args) only.add(parseDepArg(a).key.toString());
+        if (latest) {
+            for (Project.Module m : p.modules) {
+                String src = Fs.read(m.manifest.file);
+                for (Manifest.Dependency d : m.manifest.dependencies) {
+                    if (d.key().isWorkspace() || (!only.isEmpty() && !only.contains(d.key().toString()))) continue;
+                    if (d.key().isGit() && (d.spec().startsWith("#") || d.spec().matches("[0-9a-f]{7,40}"))) continue;
+                    String spec = latestSpec(repo, d.key());
+                    if (!spec.equals(d.spec())) {
+                        Log.step("Updating", d.key() + " " + d.spec() + " -> " + spec);
+                        src = JsoncEdit.set(src, List.of(d.scope().key), d.key().toString(), Jsonc.quote(spec));
+                    }
+                }
+                Fs.write(m.manifest.file, src);
+            }
+            p = Project.find(cwd);
+        }
+        Install.run(p, repo, new Install.Options(false, only.isEmpty(), only, false));
+        return 0;
+    }
+
+    int outdated(List<String> args) {
+        noMoreFlags(args);
+        Ctx c = open(false);
+        c.repo.setRefreshMetadata(true);
+        List<String[]> rows = new ArrayList<>();
+        for (Project.Module m : c.project.modules) {
+            for (Manifest.Dependency d : m.manifest.dependencies) {
+                if (d.key().isWorkspace()) continue;
+                Graph.Pkg pkg = c.graph.get(d.key().toString());
+                if (pkg == null) continue;
+                String latest, wanted;
+                if (d.key().isMaven()) {
+                    List<Version> all = c.repo.versions(d.key().group(), d.key().artifact());
+                    latest = latestSpec(c.repo, d.key());
+                    Optional<Version> w = MavenRange.parse(d.spec()).best(all);
+                    wanted = w.map(Version::toString).orElse("-");
+                } else {
+                    String l = latestSpec(c.repo, d.key());
+                    latest = l.startsWith("^") ? l.substring(1) : l;
+                    if (NpmRange.looksLikeRange(d.spec())) {
+                        List<Version> vs = new ArrayList<>();
+                        Map<String, String> tags = GitRepo.of(d.key()).tags();
+                        for (String t : tags.keySet()) {
+                            String v = tagVersion(d.key(), t, tags.keySet());
+                            if (v != null) vs.add(Version.of(v));
+                        }
+                        VersionSpec spec = NpmRange.parse(d.spec());
+                        wanted = spec.best(vs).map(Version::toString).orElse("-");
+                    } else {
+                        wanted = pkg.version;
+                    }
+                }
+                if (!Version.of(pkg.version).equals(Version.of(latest)) || !Version.of(pkg.version).equals(Version.of(wanted))) {
+                    rows.add(new String[]{d.key().toString(), pkg.version, wanted, latest, m.name() + " (" + d.scope().key + ")"});
+                }
+            }
+        }
+        if (rows.isEmpty()) {
+            Log.info("All dependencies are up to date.");
+            return 0;
+        }
+        rows.add(0, new String[]{"Package", "Current", "Wanted", "Latest", "Used by"});
+        int[] w = new int[5];
+        for (String[] r : rows) for (int i = 0; i < 5; i++) w[i] = Math.max(w[i], r[i].length());
+        for (int i = 0; i < rows.size(); i++) {
+            StringBuilder sb = new StringBuilder();
+            for (int j = 0; j < 5; j++) sb.append(String.format("%-" + (w[j] + 2) + "s", rows.get(i)[j]));
+            System.out.println(i == 0 ? Log.bold(sb.toString().strip()) : sb.toString().strip());
+        }
+        return 0;
+    }
+
+    int why(List<String> args) {
+        noMoreFlags(args);
+        if (args.size() != 1) throw new JpmException("Usage: jpm why <dependency>");
+        Ctx c = open(false);
+        String id = parseDepArg(args.get(0)).key.toString();
+        Graph.Pkg target = c.graph.get(id);
+        if (target == null) {
+            Log.info(id + " is not in the dependency graph.");
+            return 1;
+        }
+        Map<String, Collection<Graph.Edge>> roots = new LinkedHashMap<>();
+        for (Project.Module m : c.project.modules) {
+            for (Manifest.Scope s : Manifest.Scope.values()) {
+                List<Graph.Edge> e = Resolver.rootEdges(m, s);
+                if (!e.isEmpty()) roots.put(m.name() + " (" + s.key + ")", e);
+            }
+        }
+        List<List<String>> paths = c.graph.paths(roots, id);
+        System.out.println(Log.bold(id + " " + target.version) + (target.commit != null ? " (" + target.commit.substring(0, 7) + ")" : ""));
+        for (List<String> path : paths) {
+            StringBuilder sb = new StringBuilder("  ").append(path.get(0));
+            for (int i = 1; i < path.size(); i++) {
+                Graph.Pkg p = c.graph.get(path.get(i));
+                sb.append(" > ").append(path.get(i));
+                if (p != null && p.kind != Graph.Kind.LOCAL) sb.append(' ').append(p.version);
+            }
+            System.out.println(sb);
+        }
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- build / start / dev / test / run / clean
+
+    int build(List<String> args) {
+        boolean release = flag(args, "--release");
+        boolean frozen = flag(args, "--frozen");
+        String profile = option(args, "--profile");
+        if (release && profile == null) profile = "release";
+        noMoreFlags(args);
+        Ctx c = open(frozen);
+        Builder b = c.builder(Env.Mode.PRODUCTION);
+        List<Project.Module> mods = targets(c.project, args);
+        boolean all = mods.size() == c.project.modules.size() && c.project.root.isWorkspaceRoot();
+        Project.Module rootMod = c.project.rootModule();
+        if (all) Scripts.hooks(b, rootMod, c.project.root, "pre", "build", profile, Env.Mode.PRODUCTION);
+        for (Project.Module m : mods) {
+            Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
+            b.jar(m);
+            Scripts.hooks(b, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
+        }
+        if (all) Scripts.hooks(b, rootMod, c.project.root, "post", "build", profile, Env.Mode.PRODUCTION);
+        return 0;
+    }
+
+    int start(List<String> args, boolean dev) {
+        List<String> appArgs = passthrough(args);
+        noMoreFlags(args);
+        String entry = args.isEmpty() ? null : args.remove(0);
+        appArgs.addAll(0, args);
+        Env.Mode mode = dev ? Env.Mode.DEVELOPMENT : Env.Mode.PRODUCTION;
+        if (!dev) {
+            Ctx c = open(false);
+            Project.Module m = single(c.project, "run");
+            Builder b = c.builder(mode);
+            Scripts.hooks(b, m, m.manifest, "pre", "start", null, mode);
+            List<String> cmd = javaCommand(b, m, entry, appArgs);
+            return Exec.inherit(m.dir, cmd, Env.forChild(c.project.dir, mode));
+        }
+        return new DevLoop(this, entry, appArgs).run();
+    }
+
+    /** Builds and returns the command that runs a module's main. Package-visible for DevLoop. */
+    List<String> javaCommand(Builder b, Project.Module m, String entry, List<String> appArgs) {
+        String main = mainClass(m, entry);
+        b.compileMain(m);
+        Jdk jdk = b.jdk(m.manifest);
+        List<String> cmd = new ArrayList<>();
+        cmd.add(jdk.java());
+        String opts = System.getenv("JPM_JVM_ARGS");
+        if (opts != null && !opts.isBlank()) cmd.addAll(List.of(opts.trim().split("\\s+")));
+        cmd.add("-cp");
+        cmd.add(Compiler.join(b.runtimeClasspath(m)));
+        cmd.add(main);
+        cmd.addAll(appArgs);
+        return cmd;
+    }
+
+    private static String mainClass(Project.Module m, String entry) {
+        Map<String, String> mains = m.manifest.mains;
+        if (entry != null) {
+            if (mains.containsKey(entry)) return mains.get(entry);
+            if (entry.contains(".")) return entry;
+            throw new JpmException("No entry point named \"" + entry + "\" in " + m.manifest.file
+                    + (mains.isEmpty() ? "" : ". Entry points: " + String.join(", ", mains.keySet())));
+        }
+        if (mains.isEmpty()) throw new JpmException(m.manifest.file + " has no \"main\"");
+        if (mains.size() == 1) return mains.values().iterator().next();
+        if (mains.containsKey("main")) return mains.get("main");
+        throw new JpmException(m.name() + " has several entry points; pick one: jpm start <" + String.join("|", mains.keySet()) + ">");
+    }
+
+    Ctx openForDev() {
+        return open(false);
+    }
+
+    Project findProject() {
+        return Project.find(cwd);
+    }
+
+    Project.Module singleForRun(Project p) {
+        return single(p, "run");
+    }
+
+    Path cwd() {
+        return cwd;
+    }
+
+    int test(List<String> args) {
+        boolean frozen = flag(args, "--frozen");
+        String module = option(args, "--module");
+        noMoreFlags(args);
+        Ctx c = open(frozen);
+        Builder b = c.builder(Env.Mode.DEVELOPMENT);
+        List<Project.Module> mods = module != null ? targets(c.project, List.of(module)) : targets(c.project, List.of());
+        int worst = 0;
+        for (Project.Module m : mods) {
+            Scripts.hooks(b, m, m.manifest, "pre", "test", null, Env.Mode.DEVELOPMENT);
+            int code = TestRunner.run(b, m, args);
+            if (code != 0) worst = code;
+            else Scripts.hooks(b, m, m.manifest, "post", "test", null, Env.Mode.DEVELOPMENT);
+        }
+        return worst;
+    }
+
+    int runScript(List<String> args) {
+        if (args.isEmpty()) {
+            Project p = Project.find(cwd);
+            Project.Module m = p.moduleAt(cwd) != null ? p.moduleAt(cwd) : p.rootModule();
+            if (m.manifest.scripts.isEmpty()) {
+                Log.info("No scripts in " + m.manifest.file);
+            } else {
+                for (Map.Entry<String, String> e : m.manifest.scripts.entrySet()) {
+                    System.out.println(Log.bold(e.getKey()) + "  " + Log.dim(e.getValue()));
+                }
+            }
+            return 0;
+        }
+        String name = args.remove(0);
+        if (!args.isEmpty() && args.get(0).equals("--")) args.remove(0);
+        Ctx c = open(false);
+        Project.Module m = c.project.moduleAt(cwd);
+        if (m == null || (!m.manifest.scripts.containsKey(name) && c.project.root.scripts.containsKey(name))) {
+            m = c.project.rootModule();
+        }
+        Builder b = c.builder(Env.Mode.DEVELOPMENT);
+        return Scripts.run(b, m, name, args, Env.Mode.DEVELOPMENT);
+    }
+
+    int clean(List<String> args) {
+        noMoreFlags(args);
+        Project p = Project.find(cwd);
+        Fs.deleteTree(p.dir.resolve(".cache").resolve("build"));
+        for (Project.Module m : p.modules) Fs.deleteTree(m.dir.resolve("dist"));
+        Log.step("Cleaned", "build output");
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- patch
+
+    int patch(List<String> args) {
+        boolean commit = flag(args, "--commit");
+        noMoreFlags(args);
+        if (args.size() != 1) throw new JpmException("Usage: jpm patch <dependency>  |  jpm patch --commit <dependency>");
+        if (commit) {
+            Patches.commit(Project.find(cwd), args.get(0));
+            return 0;
+        }
+        Ctx c = open(false);
+        Patches.start(c.project, c.graph, c.repo, args.get(0));
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- java
+
+    int java(List<String> args) {
+        String sub = args.isEmpty() ? "list" : args.get(0);
+        if (sub.equals("list")) {
+            List<Jdk> all = Jdk.discover();
+            if (all.isEmpty()) Log.info("No JDKs found.");
+            for (Jdk j : all) {
+                System.out.println(String.format("%-28s %s", j.id() + " (" + j.vendor() + ")", j.home()));
+            }
+            return 0;
+        }
+        throw new JpmException("`jpm java " + sub + "` is not available yet. Installing and switching JDKs and GraalVM,"
+                + " and `jvm exec`, are roadmap step 2.");
+    }
+
+    // ---------------------------------------------------------------- extensions
+
+    static Path globalBin() {
+        return Fs.home().resolve("bin");
+    }
+
+    int extension(String cmd, List<String> args) {
+        if (!cmd.matches("[A-Za-z0-9][A-Za-z0-9_-]*")) throw new JpmException("Unknown command \"" + cmd + "\". Run `jpm help`.");
+        boolean win = System.getProperty("os.name").toLowerCase().contains("win");
+        Path exe = null;
+        for (String ext : win ? new String[]{".cmd", ".exe", ".bat"} : new String[]{""}) {
+            Path p = globalBin().resolve("jpm-" + cmd + ext);
+            if (Files.isRegularFile(p)) { exe = p; break; }
+        }
+        if (exe == null) exe = Exec.which("jpm-" + cmd);
+        if (exe == null) {
+            throw new JpmException("Unknown command \"" + cmd + "\". Run `jpm help`, or install an extension that provides it"
+                    + " with `jpm add -g <dependency>` (it runs as jpm-" + cmd + ").");
+        }
+        Map<String, String> env = new LinkedHashMap<>();
+        try {
+            Project p = Project.find(cwd);
+            Project.Module m = p.moduleAt(cwd) != null ? p.moduleAt(cwd) : p.rootModule();
+            env.put("JPM_PROJECT_DIR", p.dir.toString());
+            env.put("JPM_MODULE_DIR", m.dir.toString());
+            env.put("JPM_MANIFEST", m.manifest.file.toString());
+            env.put("JPM_CONFIG", Jsonc.write(m.manifest.root.value).replaceAll("\n\\s*", " "));
+            env.put("JPM_NAME", m.name());
+            env.put("JPM_VERSION", m.version());
+        } catch (JpmException e) {
+            env.put("JPM_PROJECT_DIR", cwd.toString());
+        }
+        List<String> full = new ArrayList<>();
+        full.add(exe.toString());
+        full.addAll(args);
+        return Exec.inherit(cwd, full, env);
+    }
+
+    private int addGlobal(List<String> args) {
+        for (String a : args) {
+            DepArg d = parseDepArg(a);
+            if (d.key.isWorkspace()) throw new JpmException("Workspace modules cannot be installed globally");
+            String name = d.key.mavenArtifact().replaceFirst("^jpm-", "");
+            Path dir = Fs.home().resolve("global").resolve(name);
+            MavenRepo repo = new MavenRepo(List.of());
+            String spec = d.spec != null ? d.spec : latestSpec(repo, d.key);
+            Fs.mkdirs(dir);
+            Fs.write(dir.resolve(Manifest.FILE), "{\n  \"name\": " + Jsonc.quote("jpm-global-" + name) + ",\n  \"version\": \"0.0.0\",\n"
+                    + "  \"runtime\": { " + Jsonc.quote(d.key.toString()) + ": " + Jsonc.quote(spec) + " }\n}\n");
+            Project p = Project.load(dir);
+            Graph g = Install.run(p, repo, new Install.Options(false, true, Set.of(), false));
+            Builder b = new Builder(p, g, repo, Env.Mode.PRODUCTION);
+            List<Path> cp = b.classpath(p.modules.get(0), Builder.Cp.RUNTIME);
+            Graph.Pkg pkg = g.get(d.key.toString());
+            String main = null;
+            if (pkg.kind == Graph.Kind.GIT) {
+                Map<String, String> mains = GitModule.locate(d.key, pkg.commit).manifest().mains;
+                if (!mains.isEmpty()) main = mains.getOrDefault("main", mains.values().iterator().next());
+            } else if (!b.paths(pkg.id, null).isEmpty()) {
+                main = Jars.mainClass(b.paths(pkg.id, null).get(0));
+            }
+            if (main == null) throw new JpmException(d.key + " has no main class, so it cannot run as an extension");
+            Jdk jdk = Jdk.select(null, null, false);
+            Fs.mkdirs(globalBin());
+            boolean win = System.getProperty("os.name").toLowerCase().contains("win");
+            Path launcher = globalBin().resolve("jpm-" + name + (win ? ".cmd" : ""));
+            String classpath = Compiler.join(cp);
+            if (win) {
+                Fs.write(launcher, "@echo off\r\n\"" + jdk.java() + "\" -cp \"" + classpath + "\" " + main + " %*\r\n");
+            } else {
+                Fs.write(launcher, "#!/bin/sh\nexec \"" + jdk.java() + "\" -cp \"" + classpath + "\" " + main + " \"$@\"\n");
+                try {
+                    launcher.toFile().setExecutable(true);
+                } catch (SecurityException ignored) {
+                }
+            }
+            Log.step("Installed", "jpm-" + name + " (" + d.key + " " + pkg.version + "); run it with `jpm " + name + "`");
+        }
+        return 0;
+    }
+
+    private int removeGlobal(List<String> args) {
+        for (String a : args) {
+            String name = a.contains(":") ? parseDepArg(a).key.mavenArtifact().replaceFirst("^jpm-", "") : a.replaceFirst("^jpm-", "");
+            Path dir = Fs.home().resolve("global").resolve(name);
+            boolean any = Files.exists(dir);
+            Fs.deleteTree(dir);
+            for (String ext : new String[]{"", ".cmd"}) {
+                try {
+                    any |= Files.deleteIfExists(globalBin().resolve("jpm-" + name + ext));
+                } catch (IOException ignored) {
+                }
+            }
+            if (!any) throw new JpmException("No global extension named " + name);
+            Log.step("Removed", "jpm-" + name);
+        }
+        return 0;
+    }
+}
