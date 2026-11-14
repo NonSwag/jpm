@@ -145,10 +145,11 @@ jobs:
           if [ "${{ matrix.exe }}" = "" ]; then
             # a fresh home, so the PATH setup is checked without touching the runner's
             home="$RUNNER_TEMP/home" && mkdir -p "$home"
-            HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
-            HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
+            # as a user runs it: no JPM_HOME, so it installs into ~/.jpm/bin of that home
+            env -u JPM_HOME HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
+            env -u JPM_HOME HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
             test "$(grep -c '.jpm/bin' "$home/.bashrc")" = 1
-            HOME="$home" bash -ic 'jvm list && jpm --version'
+            env -u JPM_HOME HOME="$home" bash -ic 'command -v jpm && jvm list && jpm --version'
           fi
 
       - name: Test install.ps1 against this build
