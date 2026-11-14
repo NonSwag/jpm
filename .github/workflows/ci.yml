@@ -150,6 +150,13 @@ jobs:
             env -u JPM_HOME HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
             test "$(grep -c '.jpm/bin' "$home/.bashrc")" = 1
             env -u JPM_HOME HOME="$home" bash -ic 'command -v jpm && jvm list && jpm --version'
+            # the java shim: inside a project its "java", elsewhere `jvm use`, otherwise the java already on PATH
+            test -L "$home/.jpm/bin/java"
+            mkdir -p "$home/proj" && printf '{ "name": "p", "version": "1.0.0", "java": "17" }\n' > "$home/proj/project.jsonc"
+            (cd "$home/proj" && env -u JPM_HOME HOME="$home" bash -ic 'java -version' 2>&1 | tee v.txt && grep -q 'version "17' v.txt)
+            (cd "$home/proj" && env -u JPM_HOME HOME="$home" bash -ic 'jvm current' | grep -q 'temurin-17')
+            (cd "$home" && env -u JPM_HOME HOME="$home" bash -ic 'jvm use 11 && java -version' 2>&1 | tee v.txt && grep -q 'version "11' v.txt)
+            (cd "$home/proj" && env -u JPM_HOME HOME="$home" bash -ic 'java -version' 2>&1 | grep -q 'version "17')
           fi
 
       - name: Test install.ps1 against this build
@@ -163,6 +170,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
           if (-not (($userPath -split ';') -contains (Join-Path $env:JPM_HOME 'bin'))) { throw "install.ps1 did not add jpm to the user PATH" }
+          if (-not (Test-Path (Join-Path $env:JPM_HOME 'bin\java.exe'))) { throw "install.ps1 did not create the java shim" }
+          $proj = Join-Path $env:RUNNER_TEMP 'shimproj'
+          New-Item -ItemType Directory -Force $proj | Out-Null
+          Set-Content (Join-Path $proj 'project.jsonc') '{ "name": "p", "version": "1.0.0", "java": "17" }'
+          Push-Location $proj
+          $v = & (Join-Path $env:JPM_HOME 'bin\java.exe') -version 2>&1 | Out-String
+          Pop-Location
+          Write-Host $v
+          if ($v -notmatch 'version "17') { throw "the java shim did not use the project's JDK" }
 
       - uses: actions/upload-artifact@v4
         with:

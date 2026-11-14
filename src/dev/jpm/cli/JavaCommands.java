@@ -1,5 +1,6 @@
 package dev.jpm.cli;
 
+import dev.jpm.Manifest;
 import dev.jpm.Project;
 import dev.jpm.json.Jsonc;
 import dev.jpm.json.JsoncEdit;
@@ -35,15 +36,23 @@ final class JavaCommands {
     }
 
     static final String JVM_HELP = """
-            jvm - install JDKs and GraalVM and run commands with them, without changing your setup.
+            jvm - install JDKs and GraalVM and choose which one `java` runs.
 
             Usage: jvm <command>
-              exec <java> [--] <command...>   Run a command with that JDK as JAVA_HOME and first on PATH
-              env <java>                      Print shell exports for that JDK (eval "$(jvm env 21)")
-              install <java...>               Install JDKs into ~/.jpm/jdks
+              use <java>                      Make it the default for java, javac, ... outside projects
+              use --project <java>            Set "java" in this project's project.jsonc instead
+              current                         Show which JDK `java` runs here, and why
+              install <java...>   (i)         Install JDKs into ~/.jpm/jdks
               remove <java...>                Remove JDKs that jpm installed
               list [--available [vendor]]     List installed JDKs, or what can be installed
+              exec [java] <command...>        Run one command with a JDK (java is implied for -jar, .jar, -version)
+              env <java>                      Print exports for this shell only: eval "$(jvm env 21)"
               home [java]                     Print the home directory of a JDK
+              setup [--remove]                Create (or remove) the java, javac, ... shims in ~/.jpm/bin
+
+            How `java` is chosen (the shims in ~/.jpm/bin, first on PATH):
+              1. inside a jpm project: its "java"     2. the default from `jvm use`
+              3. otherwise the java that comes next on PATH, unchanged
 
             <java> is a version or vendor-version: 21, 21.0.5, temurin-17, zulu-21, graalvm-21, oracle-graalvm-21.
             Missing JDKs are installed automatically (set JPM_NO_INSTALL to turn that off).
@@ -53,12 +62,14 @@ final class JavaCommands {
         String sub = args.isEmpty() ? "list" : args.remove(0);
         return switch (sub) {
             case "list", "ls" -> list(args);
-            case "install", "add" -> install(args);
+            case "install", "i", "add" -> install(args);
             case "remove", "rm", "uninstall" -> remove(args);
             case "exec", "run" -> exec(args);
             case "env" -> env(args);
-            case "home", "which" -> home(args);
+            case "home" -> home(args);
             case "use" -> use(args);
+            case "current", "which" -> current(args);
+            case "setup" -> setup(args);
             case "help", "-h", "--help" -> {
                 System.out.print(JVM_HELP);
                 yield 0;
@@ -81,20 +92,23 @@ final class JavaCommands {
             return 0;
         }
         Jdk current = null;
+        String reason = null;
         try {
-            Project p = Project.find(cwd);
-            current = Toolchain.find(JavaSpec.parse(p.modules.get(0).manifest.java));
+            Shims.Choice c = Shims.choose(cwd, "java");
+            current = c.jdk();
+            reason = c.reason();
         } catch (JpmException ignored) {
         }
+        String def = Shims.defaultSpec();
+        Jdk defJdk = def == null ? null : Toolchain.find(JavaSpec.parse(def));
         for (Jdk j : all) {
             String mark = j.equals(current) ? "*" : " ";
-            String tags = (j.graal() ? " native-image" : "") + (j.managed() ? " (jpm)" : "");
-            System.out.println(mark + " " + String.format("%-34s %s", j.id() + tags, j.home()));
+            String tags = (j.graal() ? " native-image" : "") + (j.managed() ? " (jpm)" : "") + (j.equals(defJdk) ? " (default)" : "");
+            System.out.println(mark + " " + String.format("%-40s %s", j.id() + tags, j.home()));
         }
-        if (current != null) Log.info(Log.dim("* used by this project"));
+        if (current != null) Log.info(Log.dim("* what `java` runs here: " + reason));
         return 0;
     }
-
     private int install(List<String> args) {
         if (args.isEmpty()) throw new JpmException("Usage: " + self + " install <java>, e.g. 21, temurin-17 or graalvm-21");
         for (String a : args) {
@@ -151,18 +165,86 @@ final class JavaCommands {
     }
 
     private int exec(List<String> args) {
-        if (args.isEmpty()) throw new JpmException("Usage: " + self + " exec <java> [--] <command...>, e.g. jvm exec 21 -- java -jar app.jar");
-        JavaSpec spec = JavaSpec.parse(args.remove(0));
+        if (args.isEmpty()) {
+            throw new JpmException("Usage: " + self + " exec [java] <command...>, e.g. `jvm exec 21 -jar app.jar` or `jvm exec java -version`");
+        }
+        // The JDK is optional: without one, the same choice as the java shim (project, default, PATH).
+        JavaSpec spec = null;
+        if (looksLikeSpec(args.get(0))) spec = JavaSpec.parse(args.remove(0));
         if (!args.isEmpty() && args.get(0).equals("--")) args.remove(0);
-        if (args.isEmpty()) throw new JpmException("No command given. Example: " + self + " exec 21 -- java -version");
-        Jdk j = Toolchain.require(spec);
+        if (args.isEmpty()) throw new JpmException("No command given. Example: " + self + " exec 21 java -version");
         List<String> cmd = new ArrayList<>(args);
-        // Resolve JDK tools from the chosen JDK even if the OS would search PATH before our environment applies.
+        // `jvm exec 21 -jar app.jar`, `jvm exec 21 app.jar` and `jvm exec 21 -version` mean java
+        String first = cmd.get(0);
+        if (first.startsWith("-")) cmd.add(0, "java");
+        else if (first.endsWith(".jar") && Files.isRegularFile(cwd.resolve(first))) {
+            cmd.add(0, "-jar");
+            cmd.add(0, "java");
+        }
+        Jdk j = spec != null ? Toolchain.require(spec) : Shims.choose(cwd, cmd.get(0)).jdk();
+        if (j == null) j = Toolchain.require(JavaSpec.any());
+        // Run the JDK's own tool, whatever PATH says.
         Path tool = j.bin(cmd.get(0));
         if (!cmd.get(0).contains("/") && !cmd.get(0).contains("\\") && Files.exists(tool)) cmd.set(0, tool.toString());
-        return Exec.inherit(cwd, cmd, envFor(j));
+        return Shims.execTransparently(cmd, envFor(j));
     }
 
+    /** True if an argument names a JDK (21, 21.0.5, temurin-17, graalvm) rather than a command. */
+    static boolean looksLikeSpec(String a) {
+        if (a.isEmpty() || a.startsWith("-") || a.contains("/") || a.contains("\\") || a.endsWith(".jar")) return false;
+        if (Shims.TOOLS.contains(a)) return false;
+        try {
+            JavaSpec s = JavaSpec.parse(a);
+            return s.version() != null || s.distribution() != null;
+        } catch (JpmException e) {
+            return false;
+        }
+    }
+
+    private int current(List<String> args) {
+        String tool = args.isEmpty() ? "java" : args.get(0);
+        Shims.Choice c = Shims.choose(cwd, tool);
+        if (c.jdk() != null) {
+            System.out.println(c.jdk().id() + "  " + c.jdk().home());
+        } else {
+            System.out.println(c.systemTool());
+        }
+        Log.info(Log.dim("chosen by " + c.reason()));
+        if (!Shims.installed()) {
+            Log.warn("the java shim is not installed, so `java` in your shell does not follow this yet. Run `jvm setup`.");
+        }
+        return 0;
+    }
+
+    private int setup(List<String> args) {
+        if (args.remove("--remove")) {
+            List<String> removed = Shims.remove();
+            Log.step("Removed", removed.isEmpty() ? "no shims" : String.join(", ", removed) + " from " + Shims.bin());
+            return 0;
+        }
+        List<String> done = Shims.install();
+        Log.step("Shims", String.join(", ", done) + Log.dim(" in " + Shims.bin()));
+        checkPathOrder();
+        return 0;
+    }
+
+    /** Warns if another java comes before the shims on PATH. */
+    static void checkPathOrder() {
+        Path ours = Shims.bin().toAbsolutePath().normalize();
+        String path = System.getenv("PATH");
+        if (path == null) return;
+        for (String d : path.split(File.pathSeparator)) {
+            if (d.isEmpty()) continue;
+            Path dir = Path.of(d).toAbsolutePath().normalize();
+            if (dir.equals(ours)) return;
+            boolean win = System.getProperty("os.name").toLowerCase().contains("win");
+            if (Files.exists(dir.resolve(win ? "java.exe" : "java"))) {
+                Log.warn(dir + " comes before " + ours + " on PATH, so its java wins. Put " + ours + " first.");
+                return;
+            }
+        }
+        Log.warn(ours + " is not on PATH yet; open a new terminal (the installer adds it).");
+    }
     private int env(List<String> args) {
         if (args.size() != 1) throw new JpmException("Usage: " + self + " env <java>");
         Jdk j = Toolchain.require(JavaSpec.parse(args.get(0)));
@@ -180,17 +262,44 @@ final class JavaCommands {
 
     /** {@code jpm java use 21}: records the JDK in the manifest (and installs it). */
     private int use(List<String> args) {
-        if (self.equals("jvm")) throw new JpmException("jvm never changes your projects; use `jpm java use` inside a project");
-        if (args.size() != 1) throw new JpmException("Usage: jpm java use <java>");
+        boolean project = args.remove("--project") || !self.equals("jvm");
+        boolean unset = args.remove("--unset") || (args.size() == 1 && args.get(0).equals("system"));
+        if (unset && !project) {
+            try {
+                Files.deleteIfExists(Shims.defaultFile());
+            } catch (java.io.IOException e) {
+                throw new JpmException(e.getMessage());
+            }
+            Log.step("Default", "removed; outside projects `java` is the one next on PATH");
+            return 0;
+        }
+        if (args.size() != 1) throw new JpmException("Usage: " + self + " use <java>, e.g. " + self + " use 21");
         JavaSpec spec = JavaSpec.parse(args.get(0));
-        if (spec.version() == null) throw new JpmException("Say which version, e.g. jpm java use 21");
-        Project p = Project.find(cwd);
-        Project.Module m = p.moduleAt(cwd) != null ? p.moduleAt(cwd) : p.rootModule();
-        Jdk j = Toolchain.require(spec);
+        if (spec.version() == null) throw new JpmException("Say which version, e.g. " + self + " use 21");
         String value = args.get(0).trim();
-        String src = Fs.read(m.manifest.file);
-        Fs.write(m.manifest.file, JsoncEdit.set(src, List.of(), "java", Jsonc.quote(value)));
-        Log.step("Using", value + " (" + j.id() + ") in " + p.dir.relativize(m.manifest.file).toString().replace('\\', '/'));
+        Jdk j = Toolchain.require(spec);
+        if (project) {
+            Project p = Project.find(cwd);
+            Project.Module m = p.moduleAt(cwd) != null ? p.moduleAt(cwd) : p.rootModule();
+            String src = Fs.read(m.manifest.file);
+            Fs.write(m.manifest.file, JsoncEdit.set(src, List.of(), "java", Jsonc.quote(value)));
+            Log.step("Using", value + " (" + j.id() + ") in " + p.dir.relativize(m.manifest.file).toString().replace('\\', '/'));
+        } else {
+            Fs.write(Shims.defaultFile(), value + "\n");
+            Log.step("Default", value + " (" + j.id() + ") for java, javac, ... outside jpm projects");
+            Manifest here = Shims.projectManifest(cwd);
+            if (here != null && here.java != null) {
+                Log.info(Log.dim("Here the project's \"java\": \"" + here.java + "\" still wins; `jvm use --project " + value + "` changes it."));
+            }
+        }
+        if (!Shims.installed()) {
+            try {
+                Shims.install();
+                Log.step("Shims", "java, javac, ... in " + Shims.bin());
+            } catch (JpmException e) {
+                Log.warn(e.getMessage());
+            }
+        }
+        checkPathOrder();
         return 0;
-    }
-}
+    }}

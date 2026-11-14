@@ -76,7 +76,7 @@ public record Jdk(Path home, int major, String version, boolean graal, String di
             Jdk nested = Toolchain.probeInstalled(m);
             homes.add(nested != null ? nested.home() : m);
         }
-        Path onPath = Exec.which("javac");
+        Path onPath = Exec.which("javac", Fs.home().resolve("bin"));
         if (onPath != null) {
             try {
                 homes.add(onPath.toRealPath().getParent().getParent());

@@ -38,6 +38,11 @@ try {
     Copy-Item -Force (Join-Path $dir 'jpm.exe') (Join-Path $dir 'jvm.exe')
     $version = & (Join-Path $dir 'jpm.exe') --version
     Write-Host "Installed $version to $dir (with jvm.exe)"
+    if (-not $env:JPM_NO_SHIMS) {
+        & (Join-Path $dir 'jpm.exe') jvm setup *> $null
+        if ($LASTEXITCODE -eq 0) { Write-Host "Added java, javac, ... shims that follow your project's JDK (see 'jvm current')" }
+        else { Write-Warning "could not create the java shims; run 'jvm setup' to see why" }
+    }
     $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
     $onUserPath = (($userPath -split ';') | Where-Object { $_ -and ($_.TrimEnd('\') -ieq $dir.TrimEnd('\')) }).Count -gt 0
     if ($env:JPM_NO_MODIFY_PATH) {

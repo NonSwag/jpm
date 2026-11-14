@@ -55,6 +55,16 @@ ln -sf jpm "$dir/jvm"
 
 echo "Installed $("$dir/jpm" --version) to $dir (with jvm)"
 
+# java, javac, ... shims: inside a jpm project they run its JDK, elsewhere the `jvm use` default, otherwise the
+# java that was already on PATH. JPM_NO_SHIMS=1 skips them.
+if [ -z "${JPM_NO_SHIMS:-}" ]; then
+  if "$dir/jpm" jvm setup >/dev/null 2>&1; then
+    echo "Added java, javac, ... shims that follow your project's JDK (see \`jvm current\`)"
+  else
+    echo "warning: could not create the java shims; run \`jvm setup\` to see why" >&2
+  fi
+fi
+
 # Put the install folder on PATH for future shells.
 case "$dir" in
   "$HOME"/*) shown="\$HOME${dir#"$HOME"}" ;;

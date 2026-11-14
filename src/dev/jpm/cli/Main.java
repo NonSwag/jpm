@@ -47,7 +47,9 @@ public final class Main {
               java install <java>         Install a JDK or GraalVM (21, temurin-17, graalvm-21, ...)
               java remove <java>          Remove a JDK jpm installed
               java use <java>             Set "java" in the manifest (and install it)
-              jvm exec <java> -- <cmd>    Run a command with a JDK, changing nothing persistent
+              jvm use <java>              Choose the JDK that `java` runs outside projects (shims in ~/.jpm/bin)
+              jvm current                 Show which JDK `java` runs here, and why
+              jvm exec [java] <cmd>       Run one command with a JDK
               build --bundle              Also build a runnable jar-in-jar bundle with isolated modules
               build --native              Also build a native executable with GraalVM
               start --trace               Run under the native-image tracing agent to record its config
@@ -91,7 +93,7 @@ public final class Main {
      * The name the program was started under. On Linux the executable path resolves symlinks (a `jvm`
      * symlink would read as `jpm`), so argv[0] is taken from /proc/self/cmdline instead.
      */
-    private static String invokedName() {
+    static String invokedName() {
         try {
             java.nio.file.Path cmdline = java.nio.file.Path.of("/proc/self/cmdline");
             if (java.nio.file.Files.isReadable(cmdline)) {
@@ -110,6 +112,14 @@ public final class Main {
     }
 
     static int run(List<String> args) {
+        // Started as java, javac, ...: a shim that runs the right JDK's tool, with arguments untouched.
+        // Only the native binary can be a shim: on a JVM, argv[0] is the JVM's own java.
+        // JPM_AS=shim:<tool> simulates one (tests, the jar build).
+        String as = System.getenv("JPM_AS");
+        if (as != null && as.startsWith("shim:")) return Shims.run(as.substring(5), args);
+        boolean nativeImage = System.getProperty("org.graalvm.nativeimage.imagecode") != null;
+        String invoked = invokedName();
+        if (nativeImage && Shims.isTool(invoked)) return Shims.run(invoked, args);
         if (invokedAsJvm()) {
             if (args.isEmpty() || args.get(0).equals("-h") || args.get(0).equals("--help")) {
                 System.out.print(JavaCommands.JVM_HELP);
