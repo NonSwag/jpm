@@ -74,13 +74,15 @@ public final class MavenRepo {
     public Path fetch(String group, String artifact, String version, String classifier, String ext) {
         Path local = local(group, artifact, version, classifier, ext);
         if (Files.exists(local)) return local;
+        // A "not found" is remembered per set of repositories, so adding a repository looks again.
         Path missing = local.resolveSibling(local.getFileName() + ".missing");
-        if (Files.exists(missing) && !refreshMetadata) return null;
+        String searched = String.join("\n", repos);
+        if (Files.exists(missing) && !refreshMetadata && Fs.read(missing).equals(searched)) return null;
         String rel = path(group, artifact, version, classifier, ext);
         for (String repo : repos) {
             if (download(repo + rel, local)) return local;
         }
-        if (!offline) Fs.write(missing, "");
+        if (!offline) Fs.write(missing, searched);
         return null;
     }
 
@@ -88,7 +90,9 @@ public final class MavenRepo {
         Path p = fetch(group, artifact, version, classifier, ext);
         if (p == null) {
             throw new JpmException("Could not find " + group + ":" + artifact + ":" + version
-                    + (classifier != null ? ":" + classifier : "") + " (" + ext + ") in " + String.join(", ", repos));
+                    + (classifier != null ? ":" + classifier : "") + " (" + ext + ") in " + String.join(", ", repos)
+                    + "\nIf it is published elsewhere, add that repository: `jpm add -r <url> " + group + ":" + artifact
+                    + "`, or list it in \"repositories\" in project.jsonc.");
         }
         return p;
     }
@@ -128,6 +132,20 @@ public final class MavenRepo {
     }
 
     private boolean download(String url, Path target) {
+        if (url.startsWith("file:")) {
+            // local repositories: copy the file if it is there
+            try {
+                Path src = Path.of(URI.create(url));
+                if (!Files.isRegularFile(src)) return false;
+                Files.createDirectories(target.getParent());
+                Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
+                Files.copy(src, tmp, StandardCopyOption.REPLACE_EXISTING);
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                return true;
+            } catch (IOException | IllegalArgumentException e) {
+                throw new JpmException("Could not read " + url + ": " + e.getMessage());
+            }
+        }
         if (offline) return false;
         Log.debug("GET " + url);
         for (int attempt = 0; attempt < 3; attempt++) {

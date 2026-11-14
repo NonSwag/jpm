@@ -251,46 +251,93 @@ final class Commands {
         return v.matches("\\d+(\\.\\d+){0,2}(-[0-9A-Za-z.-]+)?") ? v : null;
     }
 
+    /** Collects every value of a repeatable option such as {@code -r url -r url2}. */
+    private static List<String> options(List<String> args, String... names) {
+        List<String> out = new ArrayList<>();
+        for (String n : names) {
+            String v;
+            while ((v = option(args, n)) != null) out.add(v);
+        }
+        return out;
+    }
+
+    /** Adds Maven repository URLs to a manifest's "repositories" list, keeping the ones already there. */
+    static String withRepositories(String src, Manifest m, List<String> urls) {
+        List<String> all = new ArrayList<>(m.repositories);
+        boolean changed = false;
+        for (String u : urls) {
+            String url = u.trim();
+            if (!url.matches("(?i)(https?|file)://.+")) {
+                throw new JpmException("Invalid repository URL \"" + u + "\": expected https://..., http://... or file://...");
+            }
+            String norm = url.replaceAll("/+$", "");
+            boolean present = all.stream().anyMatch(x -> x.replaceAll("/+$", "").equalsIgnoreCase(norm));
+            if (!present) {
+                all.add(norm);
+                changed = true;
+                Log.step("Repository", norm);
+            }
+        }
+        if (!changed) return src;
+        StringBuilder raw = new StringBuilder("[");
+        for (int i = 0; i < all.size(); i++) raw.append(i == 0 ? "" : ", ").append(Jsonc.quote(all.get(i)));
+        return JsoncEdit.set(src, List.of(), "repositories", raw.append(']').toString());
+    }
+
     int add(List<String> args) {
         boolean dev = flag(args, "--dev", "-D");
         boolean test = flag(args, "--test", "-T");
         boolean global = flag(args, "-g", "--global");
+        List<String> repoUrls = options(args, "-r", "--repo", "--repository");
         noMoreFlags(args);
-        if (args.isEmpty()) throw new JpmException("Usage: jpm add <dependency>[@version] [--dev | --test]");
+        if (args.isEmpty()) throw new JpmException("Usage: jpm add [-r <repository url>] <dependency>[@version] [--dev | --test]");
         if (dev && test) throw new JpmException("Choose one of --dev and --test");
         if (global) return addGlobal(args);
         Manifest.Scope scope = dev ? Manifest.Scope.DEV : test ? Manifest.Scope.TEST : Manifest.Scope.RUNTIME;
         Project p = Project.find(cwd);
         Project.Module m = single(p, "add");
-        MavenRepo repo = new MavenRepo(p.root.repositories);
-        String original = Fs.read(m.manifest.file);
-        String src = original;
-        for (String a : args) {
-            DepArg d = parseDepArg(a);
-            if (d.key.isWorkspace() && p.module(d.key.artifact()) == null) {
-                throw new JpmException("No workspace module named \"" + d.key.artifact() + "\"");
-            }
-            String spec = d.spec != null ? d.spec : d.key.isWorkspace() ? "*" : latestSpec(repo, d.key);
-            if (d.key.isMaven()) {
-                try {
-                    MavenRange.parse(spec);
-                } catch (IllegalArgumentException e) {
-                    throw new JpmException(e.getMessage());
+        // Repositories are read from the root manifest (the workspace root in a workspace).
+        Path rootFile = p.root.file, moduleFile = m.manifest.file;
+        String rootOriginal = Fs.read(rootFile);
+        String moduleOriginal = Fs.read(moduleFile);
+        try {
+            if (!repoUrls.isEmpty()) {
+                String rootSrc = withRepositories(rootOriginal, p.root, repoUrls);
+                if (!rootSrc.equals(rootOriginal)) {
+                    Fs.write(rootFile, rootSrc);
+                    p = Project.find(cwd);
+                    m = single(p, "add");
                 }
             }
-            for (Manifest.Scope s : Manifest.Scope.values()) {
-                if (s != scope) src = JsoncEdit.remove(src, List.of(s.key), d.key.toString());
+            MavenRepo repo = new MavenRepo(p.root.repositories);
+            String src = Fs.read(moduleFile);
+            for (String a : args) {
+                DepArg d = parseDepArg(a);
+                if (d.key.isWorkspace() && p.module(d.key.artifact()) == null) {
+                    throw new JpmException("No workspace module named \"" + d.key.artifact() + "\"");
+                }
+                String spec = d.spec != null ? d.spec : d.key.isWorkspace() ? "*" : latestSpec(repo, d.key);
+                if (d.key.isMaven()) {
+                    try {
+                        MavenRange.parse(spec);
+                    } catch (IllegalArgumentException e) {
+                        throw new JpmException(e.getMessage());
+                    }
+                }
+                for (Manifest.Scope s : Manifest.Scope.values()) {
+                    if (s != scope) src = JsoncEdit.remove(src, List.of(s.key), d.key.toString());
+                }
+                src = JsoncEdit.set(src, List.of(scope.key), d.key.toString(), Jsonc.quote(spec));
+                Log.step("Adding", d.key + " " + spec + (scope == Manifest.Scope.RUNTIME ? "" : " (" + scope.key + ")"));
             }
-            src = JsoncEdit.set(src, List.of(scope.key), d.key.toString(), Jsonc.quote(spec));
-            Log.step("Adding", d.key + " " + spec + (scope == Manifest.Scope.RUNTIME ? "" : " (" + scope.key + ")"));
-        }
-        Fs.write(m.manifest.file, src);
-        try {
-            Project fresh = Project.find(cwd);
-            Install.run(fresh, repo, new Install.Options(false, false, Set.of(), false));
-        } catch (JpmException e) {
-            Fs.write(m.manifest.file, original);
-            throw new JpmException(e.getMessage() + "\n" + Manifest.FILE + " was left unchanged.");
+            Fs.write(moduleFile, src);
+            Install.run(Project.find(cwd), repo, new Install.Options(false, false, Set.of(), false));
+        } catch (RuntimeException e) {
+            // leave the manifests exactly as they were
+            Fs.write(moduleFile, moduleOriginal);
+            if (!rootFile.equals(moduleFile)) Fs.write(rootFile, rootOriginal);
+            String msg = e instanceof JpmException ? e.getMessage() : "unexpected failure: " + e;
+            throw new JpmException(msg + "\n" + Manifest.FILE + " was left unchanged.", e);
         }
         return 0;
     }

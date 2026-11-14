@@ -21,7 +21,8 @@ public final class Main {
 
             Project
               init [name]                 Create a project in the current directory
-              add <dep>[@version]         Add dependencies (--dev, --test; -g installs an extension)
+              add <dep>[@version]         Add dependencies (--dev, --test; -r <url> adds a Maven repository;
+                                          -g installs an extension)
               remove <dep>                Remove dependencies (-g removes an extension)
               install                     Resolve dependencies and write project.lock (--frozen in CI)
               update [dep...]             Re-resolve within ranges (--latest goes past them)

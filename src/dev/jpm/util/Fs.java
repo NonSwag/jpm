@@ -19,6 +19,8 @@ public final class Fs {
 
     /** Global JPM home: {@code $JPM_HOME} or {@code ~/.jpm}. */
     public static Path home() {
+        String prop = System.getProperty("jpm.home");
+        if (prop != null && !prop.isBlank()) return Path.of(prop).toAbsolutePath().normalize();
         String env = System.getenv("JPM_HOME");
         if (env != null && !env.isBlank()) return Path.of(env).toAbsolutePath().normalize();
         return Path.of(System.getProperty("user.home"), ".jpm").toAbsolutePath().normalize();

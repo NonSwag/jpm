@@ -51,7 +51,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | Command | |
 |---|---|
 | `init [name]` | Create a project |
-| `add <dep>[@version]` | Add dependencies (`--dev`, `--test`). Without a version: latest release (Maven) or `^latest-tag` (Git) |
+| `add <dep>[@version]` | Add dependencies (`--dev`, `--test`, `-r <url>` to add a Maven repository). Without a version: latest release (Maven) or `^latest-tag` (Git) |
 | `remove <dep>` | Remove dependencies |
 | `install [--frozen]` | Resolve and write `project.lock`; `--frozen` fails if the lock is stale (CI) |
 | `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them |
@@ -112,6 +112,13 @@ A dependency is a version string, or an object with options:
 
 Exclusions apply to everything the dependency brings in, as in Maven. `jpm add g:a:classifier@1.0` adds a
 classified jar.
+
+**Repositories.** Maven Central is always searched. Other Maven repositories go in `"repositories"`
+(in a workspace, on the root manifest), and `jpm add -r <url> <dependency>` adds one for you:
+
+```sh
+jpm add -r https://repo.example.dev/releases com.example:lib:1.0.0
+```
 
 Other fields: `package` (`"jar"`, the default, or `"bundle"`), `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
 `src/test/resources`; set by `jpm import`), `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
