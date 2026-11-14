@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-latest, exe: "" }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, exe: "" }
+          - { name: macos-arm64, os: macos-latest, exe: "" }
+          - { name: macos-x64, os: macos-15-intel, exe: "" }
+          - { name: windows-x64, os: windows-latest, exe: ".exe" }
+    defaults:
+      run:
+        shell: bash
+    env:
+      JPM_HOME: ${{ github.workspace }}/../jpm-home
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "21"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: ""
+
+      - name: Cache jpm downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../jpm-home/repository
+          key: jpm-${{ matrix.name }}-${{ hashFiles('project.lock') }}
+          restore-keys: jpm-${{ matrix.name }}-
+
+      - name: Bootstrap
+        run: ./bootstrap.sh
+
+      - name: Test
+        run: bin/jpm test --frozen
+
+      - name: Native image
+        run: bin/jpm run native
+
+      - name: Smoke test the native binary
+        run: |
+          set -eux
+          JPM="$PWD/dist/jpm${{ matrix.exe }}"
+          "$JPM" --version
+          "$JPM" java list
+          work="$RUNNER_TEMP/smoke"
+          rm -rf "$work" && mkdir -p "$work" && cd "$work"
+          "$JPM" init smoke
+          "$JPM" add org.apache.commons:commons-lang3@3.14.0
+          "$JPM" add --dev org.projectlombok:lombok@1.18.34
+          cat > src/smoke/App.java <<'EOF'
+          package smoke;
+
+          public class App {
+              @lombok.Value
+              static class Pair { String a; String b; }
+
+              public static String greeting() {
+                  return "Hello from smoke!";
+              }
+
+              public static void main(String[] args) {
+                  System.out.println(greeting() + " " + org.apache.commons.lang3.StringUtils.reverse("ok")
+                      + " " + new Pair("x", "y"));
+              }
+          }
+          EOF
+          "$JPM" build
+          "$JPM" start | tee out.txt
+          grep -q "Hello from smoke! ko App.Pair(a=x, b=y)" out.txt
+          "$JPM" test
+          "$JPM" install --frozen
+          "$JPM" why org.apache.commons:commons-lang3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jpm-${{ matrix.name }}
+          path: dist/jpm${{ matrix.exe }}
+          if-no-files-found: error

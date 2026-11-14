@@ -23,9 +23,12 @@ jpm test                  # JUnit 5 is added automatically
 jpm build --release       # dist/hello-0.1.0.jar, runs postbuild:release hooks
 ```
 
-jpm has no dependencies of its own and is written so it can be compiled with GraalVM
-`native-image` (`jpm build && jpm run native`, needs GraalVM). It builds and tests itself:
-`bin/jpm test`.
+jpm has no dependencies of its own and compiles to a native binary with GraalVM
+(`jpm build && jpm run native`, with `GRAALVM_HOME` set). It builds and tests itself: `bin/jpm test`.
+On Windows use `bin\jpm.cmd` for the jar build.
+
+CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the native binary on Linux
+(x64, arm64), macOS (arm64, x64) and Windows (x64); the binaries are uploaded as workflow artifacts.
 
 ## Commands
 
