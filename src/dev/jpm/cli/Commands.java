@@ -749,7 +749,8 @@ final class Commands {
      * {@code jpm info --json}: the project as extensions see it. The output is a stable contract: fields are
      * only ever added. With {@code --classpath}, each module also lists its compile classpath (which may
      * build Git dependencies first). With {@code --ide}, each module also lists its test folders, the folders
-     * an IDE should exclude, its scripts, and {@code ideDependencies}: every package on its classpaths with
+     * an IDE should exclude, its scripts, the folder of its generated sources (written on the way, so the
+     * defines class resolves without a build), and {@code ideDependencies}: every package on its classpaths with
      * the narrowest scope it is needed in, workspace modules as module references (nothing of the project is
      * compiled) and jars with their sources where available.
      */
@@ -842,6 +843,12 @@ final class Commands {
                 mod.put("testResourceDir", m.testResourcesDir().toString());
                 mod.put("excludeDirs", List.of(m.dir.resolve(".cache").toString(), m.dir.resolve("dist").toString()));
                 mod.put("scripts", new ArrayList<>(mf.scripts.keySet()));
+                try {
+                    Path gen = b.generateSources(m);
+                    if (gen != null) mod.put("generatedSourceDir", gen.toString());
+                } catch (JpmException e) {
+                    mod.put("generatedSourceError", e.getMessage());
+                }
                 mod.put("ideDependencies", ideDependencies(c, b, m));
             }
             modules.add(mod);

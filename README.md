@@ -330,6 +330,7 @@ jar and is picked up by native-image automatically.
 | `JPM_HOME` | Where jpm keeps its cache, JDKs and shims (default `$HOME/.jpm`) |
 | `JPM_OFFLINE`, `--offline` | Use only what is cached |
 | `JPM_VERBOSE`, `-v` | Show what jpm runs and downloads |
+| `JPM_COLOR=1`, `NO_COLOR` | Force colored output where it is shown in color but is not a terminal (IDE consoles), or turn colors off |
 | `JPM_NO_INSTALL` | Never install JDKs automatically |
 | `JPM_JAVA` | JDK for the `java` shims in this shell, e.g. `21` |
 | `JPM_JVM_ARGS` | JVM options for `jpm start` and `jpm dev` |

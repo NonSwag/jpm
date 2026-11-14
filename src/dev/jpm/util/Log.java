@@ -5,7 +5,9 @@ public final class Log {
     private Log() {}
 
     public static boolean verbose = System.getenv("JPM_VERBOSE") != null;
-    private static final boolean COLOR = System.console() != null && System.getenv("NO_COLOR") == null;
+    /** Colors on a terminal, or where JPM_COLOR=1 says the output is shown in color (IDE consoles). */
+    private static final boolean COLOR = (System.console() != null || "1".equals(System.getenv("JPM_COLOR")))
+            && System.getenv("NO_COLOR") == null;
 
     private static String c(String code, String s) {
         return COLOR ? "\u001b[" + code + "m" + s + "\u001b[0m" : s;

@@ -210,16 +210,8 @@ public final class Builder {
             int release = release(m.manifest, jdk);
             List<Path> roots = new ArrayList<>();
             roots.add(m.srcDir());
-            List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
-            Path gen = m.cacheDir().resolve("generated");
-            if (!defs.isEmpty() || m.manifest.defineClass != null) {
-                String fqcn = Defines.className(m.manifest);
-                Path f = gen.resolve(fqcn.replace('.', '/') + ".java");
-                Fs.writeIfChanged(f, Defines.source(fqcn, defs, m.name(), m.version()));
-                roots.add(gen);
-            } else {
-                Fs.deleteTree(gen);
-            }
+            Path gen = generateSources(m);
+            if (gen != null) roots.add(gen);
             String key = inputsKey(cp, proc);
             boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
                     classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key,
@@ -253,6 +245,22 @@ public final class Builder {
         Fs.write(stamp, key);
         Log.step("Packaged", m.dir.relativize(jar).toString());
         return jar;
+    }
+
+    /**
+     * Writes the module's generated sources (the defines class) and returns their folder, or null if the
+     * module has none.
+     */
+    public Path generateSources(Project.Module m) {
+        List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
+        Path gen = m.cacheDir().resolve("generated");
+        if (defs.isEmpty() && m.manifest.defineClass == null) {
+            Fs.deleteTree(gen);
+            return null;
+        }
+        String fqcn = Defines.className(m.manifest);
+        Fs.writeIfChanged(gen.resolve(fqcn.replace('.', '/') + ".java"), Defines.source(fqcn, defs, m.name(), m.version()));
+        return gen;
     }
 
     /** Compiles test sources. Returns false if the module has no tests. */
