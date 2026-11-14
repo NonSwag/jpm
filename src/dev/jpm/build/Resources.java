@@ -16,25 +16,18 @@ import java.util.TreeSet;
  * Copies a module's resources next to its compiled classes, so the classes folder is everything the jar,
  * the classpath and the module path need.
  *
- * <p>In the jpm layout resources sit among the sources: every file in {@code src/} (or {@code test/}) that
- * is not a {@code .java} file is a resource, except files and folders whose name starts with a dot.
- * Resources removed from the source folder are removed from the output again.
+ * <p>Everything in the resource folder ({@code src/assets/}, {@code test/assets/}) is copied as is.
+ * Resources removed from it are removed from the output again.
  */
 public final class Resources {
     private Resources() {}
 
-    /** One folder to copy from. {@code mixed}: it also holds sources, whose .java files are left out. */
-    public record Root(Path dir, boolean mixed) {}
-
     /** The resources under {@code roots}, by path relative to their root; earlier roots win. */
-    public static TreeMap<String, Path> find(List<Root> roots) {
+    public static TreeMap<String, Path> find(List<Path> roots) {
         TreeMap<String, Path> out = new TreeMap<>();
-        for (Root root : roots) {
-            for (Path f : Fs.files(root.dir, null)) {
-                Path rel = root.dir.relativize(f);
-                if (root.mixed && hidden(rel)) continue;
-                if (root.mixed && f.getFileName().toString().endsWith(".java")) continue;
-                out.putIfAbsent(Fs.slash(rel), f);
+        for (Path root : roots) {
+            for (Path f : Fs.files(root, null)) {
+                out.putIfAbsent(Fs.slash(root.relativize(f)), f);
             }
         }
         return out;
@@ -45,7 +38,7 @@ public final class Resources {
      * (recorded in {@code stateFile}), without touching the classes javac wrote there. Returns true if
      * anything changed.
      */
-    public static boolean sync(List<Root> roots, Path out, Path stateFile) {
+    public static boolean sync(List<Path> roots, Path out, Path stateFile) {
         TreeMap<String, Path> now = find(roots);
         TreeSet<String> before = new TreeSet<>();
         if (Files.isRegularFile(stateFile)) {
@@ -81,8 +74,4 @@ public final class Resources {
         return true;
     }
 
-    private static boolean hidden(Path rel) {
-        for (Path part : rel) if (part.toString().startsWith(".")) return true;
-        return false;
-    }
 }

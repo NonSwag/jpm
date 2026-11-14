@@ -38,7 +38,12 @@ public final class Compiler {
 
     public record Request(String label, Jdk jdk, int release, List<Path> sourceRoots, List<Path> classpath,
                           List<Path> processorPath, Path outDir, Path stateFile, List<String> extraArgs,
-                          String inputsKey) {}
+                          String inputsKey, List<Path> excludes) {
+        public Request(String label, Jdk jdk, int release, List<Path> sourceRoots, List<Path> classpath,
+                       List<Path> processorPath, Path outDir, Path stateFile, List<String> extraArgs, String inputsKey) {
+            this(label, jdk, release, sourceRoots, classpath, processorPath, outDir, stateFile, extraArgs, inputsKey, List.of());
+        }
+    }
 
     private static final class State {
         String key;
@@ -50,12 +55,18 @@ public final class Compiler {
         final Map<String, ClassInfo> info = new TreeMap<>();
     }
 
+    /** Sources inside an excluded folder (the assets inside the source folder) are not compiled. */
+    private static boolean excluded(Request r, Path p) {
+        for (Path e : r.excludes) if (p.startsWith(e)) return true;
+        return false;
+    }
+
     /** Compiles if needed. Returns true if javac ran. */
     public static boolean compile(Request r) {
         Map<String, Path> sources = new TreeMap<>();
         for (int i = 0; i < r.sourceRoots.size(); i++) {
             Path root = r.sourceRoots.get(i);
-            for (Path p : Fs.files(root, ".java")) sources.put(i + ":" + Fs.slash(root.relativize(p)), p);
+            for (Path p : Fs.files(root, ".java")) if (!excluded(r, p)) sources.put(i + ":" + Fs.slash(root.relativize(p)), p);
         }
         String key = new Hash().add(r.inputsKey).add(r.jdk.id()).add(Integer.toString(r.release))
                 .add(String.join("\u0001", r.extraArgs)).hex();

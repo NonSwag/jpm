@@ -97,7 +97,7 @@ final class DevLoop {
         for (Project.Module m : p.modules) {
             roots.add(m.dir.resolve(Manifest.FILE));
             roots.add(m.srcDir());
-            if (!m.assetsDir().equals(m.srcDir())) roots.add(m.assetsDir());
+            if (!m.assetsDir().startsWith(m.srcDir())) roots.add(m.assetsDir());
             roots.add(m.dir.resolve("patches"));
         }
         StringBuilder sb = new StringBuilder();

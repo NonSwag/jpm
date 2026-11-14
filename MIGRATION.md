@@ -60,35 +60,29 @@ result more carefully.
 Imported manifests contain `"layout": "maven"`, so the first build works without moving anything:
 jpm reads `src/main/java`, `src/main/resources`, `src/test/java` and `src/test/resources`.
 
-jpm's standard layout is the recommended one, and the one new projects use. It has two folders, with
-resources next to the code that uses them:
+jpm's standard layout is the recommended one, and the one new projects use. Sources and tests each
+have one folder, with their resources in `assets/` inside it:
 
 ```
-src/    Java sources and resources (was src/main/java and src/main/resources)
-test/   test sources and test resources (was src/test/java and src/test/resources)
+src/              Java sources (was src/main/java)
+src/assets/       resources, copied into the jar as is (was src/main/resources)
+test/             test sources (was src/test/java)
+test/assets/      test resources (was src/test/resources)
 ```
 
-Every file in `src/` that is not a `.java` file goes into the jar at the same path, so
-`src/main/resources/META-INF/services/…` becomes `src/META-INF/services/…`. To switch, move the folders
-and drop the `layout` line. The sources are moved out of `src/` first, because `src/main/java` cannot be
-moved into `src/` while it is still inside it:
+To switch, move the folders and drop the `layout` line. The sources are moved out of `src/` first,
+because `src/main/java` cannot be moved into `src/` while it is still inside it:
 
 ```sh
-# move each file of folder $1 to the same path under $2, merging folders both have
-merge() { [ -d "$1" ] || return 0; (cd "$1" && git -c core.quotePath=false ls-files) | while IFS= read -r f; do
-  mkdir -p "$2/$(dirname "$f")" && git mv "$1/$f" "$2/$f"; done; }
-
-merge src/main/java      .src-tmp      # temporary name, renamed to src/ below
-merge src/main/resources .src-tmp
-merge src/test/java      test
-merge src/test/resources test
-find src -type d -empty -delete        # removes what is left of src/main and src/test
+git mv src/main/java .src-tmp              # temporary name, renamed to src/ below
+git mv src/main/resources .assets-tmp      # if present
+git mv src/test/java test                  # if present
+git mv src/test/resources test/assets      # if present
+find src -type d -empty -delete            # removes what is left of src/main and src/test
 git mv .src-tmp src
+git mv .assets-tmp src/assets              # if present
 # then remove  "layout": "maven",  from project.jsonc
 ```
-
-Resources and sources in the same package end up in one folder; `git mv` refuses to overwrite a file
-that exists in both, so check its output. Resources whose name starts with a dot are not packaged in this layout.
 
 ## 2. Build and test
 

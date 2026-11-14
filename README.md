@@ -153,14 +153,11 @@ Other fields:
 
 Unknown fields are errors, and every error names the file and line.
 
-Layout: `src/` and `test/`, `scripts/`, `patches/`, `.cache/` (build cache, not committed), `dist/` (jars), `.changeset/` (reserved).
+Layout: `src/` with `src/assets/` (resources, copied into the jar as is), `test/` with `test/assets/` (test
+resources), `scripts/`, `patches/`, `.cache/` (build cache, not committed), `dist/` (jars), `.changeset/` (reserved).
 
-Resources sit among the sources: every file in `src/` that is not a `.java` file goes into the jar at the
-same path (`src/demo/icon.png` is `demo/icon.png`, loaded with `App.class.getResource("icon.png")`; service
-files go in `src/META-INF/services/`), and every such file in `test/` is on the test classpath. Files and
-folders whose name starts with a dot are left out. Projects made with earlier versions kept resources in
-`assets/` and `test/resources/`; jpm warns until they are moved (`git mv assets/* src/`,
-`git mv test/resources/* test/`).
+`src/assets/demo/icon.png` is `demo/icon.png` in the jar; service files go in
+`src/assets/META-INF/services/`. `.java` files inside the assets folders are not compiled.
 
 ## How it works
 
@@ -231,7 +228,7 @@ and runs as a named module, with nothing to configure:
   read. `requires static` fits `dev` dependencies such as annotations. A named module is always compiled
   as a whole; the per-module cache still skips it when nothing changed.
 - **Running:** `jpm start` and `jpm dev` start it with `-m <module>/<main>`, so `provides`, `uses`,
-  exports and encapsulation behave as declared; resources are part of the module.
+  exports and encapsulation behave as declared; resources in `src/assets/` are part of the module.
 - Tests compile and run on the class path, so they can reach internal packages. `java -jar` and
   bundles also use the class path, where the JDK ignores `module-info`.
 
@@ -323,7 +320,7 @@ it; `JPM_NO_SHIMS=1` skips the shims) and `jvm setup --remove` takes the shims a
 **Native builds.** `jpm build --native` builds the jar, then runs native-image from a GraalVM of the
 project's Java version (any installed GraalVM-based JDK, else GraalVM Community, installed) and writes
 `dist/<name>`. Extra flags go in `"nativeArgs"`. `jpm start --trace` runs the app under the tracing
-agent and merges what it records into `src/META-INF/native-image/<group>/<name>/`, which ships in the
+agent and merges what it records into `src/assets/META-INF/native-image/<group>/<name>/`, which ships in the
 jar and is picked up by native-image automatically.
 
 ## Environment variables

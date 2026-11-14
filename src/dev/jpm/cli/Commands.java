@@ -554,7 +554,7 @@ final class Commands {
         return javaCommand(b, m, entry, appArgs, false);
     }
 
-    /** Where the tracing agent writes configuration: inside src/, so it ships in the jar. */
+    /** Where the tracing agent writes configuration: inside src/assets/, so it ships in the jar. */
     static Path traceDir(Project.Module m) {
         String group = m.manifest.group != null ? m.manifest.group : m.name();
         return m.assetsDir().resolve("META-INF").resolve("native-image").resolve(group).resolve(m.name());

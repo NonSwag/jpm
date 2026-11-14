@@ -1,6 +1,5 @@
 package dev.jpm.build;
 
-import dev.jpm.Layout;
 
 import dev.jpm.DepKey;
 import dev.jpm.Manifest;
@@ -223,8 +222,9 @@ public final class Builder {
             }
             String key = inputsKey(cp, proc);
             boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
-                    classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key));
-            Resources.sync(resourceRoots(m.manifest.layout, m.dir, false), classesDir(m), m.cacheDir().resolve("resources.list"));
+                    classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key,
+                    List.of(m.assetsDir())));
+            Resources.sync(List.of(m.assetsDir()), classesDir(m), m.cacheDir().resolve("resources.list"));
             if (ran) Log.step("Compiled", m.name() + " " + m.version() + Log.dim(" (" + jdk.id() + ", release " + release + ")"));
             compiledModules.put(m.name(), ran);
             return ran;
@@ -255,26 +255,10 @@ public final class Builder {
         return jar;
     }
 
-    /** Where a module's resources come from: its resource folder, without .java files when sources share it. */
-    static List<Resources.Root> resourceRoots(Layout layout, Path dir, boolean tests) {
-        Path res = tests ? layout.testResources(dir) : layout.resources(dir);
-        return List.of(new Resources.Root(res, layout.mixed()));
-    }
-
-    /**
-     * A Git dependency's resources. Tags made with the earlier jpm layout keep them in {@code assets/}, and
-     * cannot be moved, so that folder is still read for them.
-     */
-    static List<Resources.Root> gitResourceRoots(Layout layout, Path dir) {
-        List<Resources.Root> roots = new ArrayList<>(resourceRoots(layout, dir, false));
-        if (layout == Layout.JPM && Files.isDirectory(dir.resolve("assets"))) roots.add(new Resources.Root(dir.resolve("assets"), false));
-        return roots;
-    }
-
     /** Compiles test sources. Returns false if the module has no tests. */
     public boolean compileTests(Project.Module m) {
         Path testDir = m.testDir();
-        if (Fs.files(testDir, ".java").isEmpty()) return false;
+        if (Fs.files(testDir, ".java").stream().allMatch(f -> f.startsWith(m.testResourcesDir()))) return false;
         compileMain(m);
         List<Path> cp = new ArrayList<>();
         cp.add(classesDir(m));
@@ -283,8 +267,8 @@ public final class Builder {
         Jdk jdk = jdk(m.manifest);
         boolean ran = Compiler.compile(new Compiler.Request(m.name() + " tests", jdk, release(m.manifest, jdk), List.of(testDir),
                 cp, proc, testClassesDir(m), m.cacheDir().resolve("test-classes.state.json"), m.manifest.javacArgs,
-                inputsKey(cp, proc) + treeKey(List.of(classesDir(m)))));
-        Resources.sync(resourceRoots(m.manifest.layout, m.dir, true), testClassesDir(m), m.cacheDir().resolve("test-resources.list"));
+                inputsKey(cp, proc) + treeKey(List.of(classesDir(m))), List.of(m.testResourcesDir())));
+        Resources.sync(List.of(m.testResourcesDir()), testClassesDir(m), m.cacheDir().resolve("test-resources.list"));
         if (ran) Log.step("Compiled", m.name() + " tests");
         return true;
     }
@@ -649,8 +633,9 @@ public final class Builder {
             }
             Path classes = buildDir.resolve("classes");
             Compiler.compile(new Compiler.Request(p.id, jdk, release, roots, cp, proc, classes,
-                    buildDir.resolve("state.json"), mod.manifest().javacArgs, key));
-            Resources.sync(gitResourceRoots(mod.manifest().layout, src), classes, buildDir.resolve("resources.list"));
+                    buildDir.resolve("state.json"), mod.manifest().javacArgs, key,
+                    List.of(mod.manifest().layout.resources(src))));
+            Resources.sync(List.of(mod.manifest().layout.resources(src)), classes, buildDir.resolve("resources.list"));
             List<Path> dirs = new ArrayList<>();
             dirs.add(classes);
             Map<String, String> attrs = new LinkedHashMap<>();
