@@ -1,3 +1,4 @@
 .cache/
 dist/
 .env.local
+.idea
