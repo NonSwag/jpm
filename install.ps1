@@ -9,7 +9,7 @@ $ErrorActionPreference = 'Stop'
 
 $repo = if ($env:JPM_REPO) { $env:JPM_REPO } else { 'NonSwag/jpm' }
 if ($env:JPM_INSTALL_BASE) { $base = $env:JPM_INSTALL_BASE }
-elseif ($env:JPM_VERSION) { $base = "https://github.com/$repo/releases/download/v$($env:JPM_VERSION)" }
+elseif ($env:JPM_VERSION) { $base = "https://github.com/$repo/releases/download/$($env:JPM_VERSION)" }
 else { $base = "https://github.com/$repo/releases/latest/download" }
 
 $jpmHome = if ($env:JPM_HOME) { $env:JPM_HOME } else { Join-Path $env:USERPROFILE '.jpm' }

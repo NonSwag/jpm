@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh
 #
-# JPM_VERSION=0.1.0 picks a version, JPM_HOME changes the install root, and JPM_INSTALL_BASE replaces the
+# JPM_VERSION=0.3.0 picks a version, JPM_HOME changes the install root, and JPM_INSTALL_BASE replaces the
 # download URL (a mirror, or file:///path for testing). The install folder is added to PATH in your shell's
 # startup file (one marked line, added once); JPM_NO_MODIFY_PATH=1 skips that.
 set -eu
@@ -12,7 +12,7 @@ repo="${JPM_REPO:-NonSwag/jpm}"
 if [ -n "${JPM_INSTALL_BASE:-}" ]; then
   base="$JPM_INSTALL_BASE"
 elif [ -n "${JPM_VERSION:-}" ]; then
-  base="https://github.com/$repo/releases/download/v$JPM_VERSION"
+  base="https://github.com/$repo/releases/download/$JPM_VERSION"
 else
   base="https://github.com/$repo/releases/latest/download"
 fi

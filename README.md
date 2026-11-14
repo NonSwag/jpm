@@ -21,7 +21,8 @@ The scripts download the native binary for your platform, check it against the r
 in your shell's startup file (`~/.zshrc`, `~/.bashrc` and on macOS `~/.bash_profile`, fish's
 `conf.d/jpm.fish`, or `~/.profile`), or your user PATH on Windows. It is added once, so re-running
 the script to update is safe. Set `JPM_NO_MODIFY_PATH=1` to skip it. Releases are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows
-(x64) when a `v*` tag is pushed; the tag must match the version in `project.jsonc`.
+(x64) when a version tag such as `0.3.0` is pushed (no `v` prefix); the tag must match the version in
+`project.jsonc`. `JPM_VERSION=0.3.0` makes the scripts install that version instead of the latest.
 
 ## Getting started
 
