@@ -6,8 +6,8 @@ patches and build-time defines, driven by one `project.jsonc`. The command is `j
 This covers **all three roadmap steps** of the spec: the build tool itself (manifest, lockfile,
 resolution from Git and Maven Central, building, running, defines, env files, patches, workspaces,
 tests, scripts, hooks, extensions), JDK/GraalVM management with native builds (`jpm java`, `jvm`,
-`build --native`), and importing and building existing Maven and Gradle projects (`jpm import`, and Git
-dependencies without a `project.jsonc`).
+`java` that follows your project, `build --native`), and importing and building existing Maven and
+Gradle projects (`jpm import`, and Git dependencies without a `project.jsonc`).
 
 ## Install
 
@@ -16,16 +16,25 @@ curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | 
 irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
-The scripts download the native binary for your platform, check it against the release's
-`SHA256SUMS`, put `jpm` and `jvm` into `~/.jpm/bin`, and add that folder to your PATH: one marked line
-in your shell's startup file (`~/.zshrc`, `~/.bashrc` and on macOS `~/.bash_profile`, fish's
-`conf.d/jpm.fish`, or `~/.profile`), or your user PATH on Windows. It is added once, so re-running
-the script to update is safe. Set `JPM_NO_MODIFY_PATH=1` to skip it. Releases are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows
-(x64) when a version tag such as `0.3.0` is pushed (no `v` prefix); the tag must match the version in
-`project.jsonc`. `JPM_VERSION=0.3.0` makes the scripts install that version instead of the latest.
+The scripts:
 
-`jpm upgrade` updates jpm to the latest release the same way (checksum-verified, in place);
-`jpm upgrade --check` only reports, and `jpm upgrade 0.3.0` installs a given version.
+- download the native binary for your platform and check it against the release's `SHA256SUMS`;
+- put `jpm` and `jvm` into `~/.jpm/bin`;
+- add that folder to your PATH, once: one marked line in your shell's startup file (`~/.zshrc`,
+  `~/.bashrc` and on macOS `~/.bash_profile`, fish's `conf.d/jpm.fish`, or `~/.profile`), or your user
+  PATH on Windows. `JPM_NO_MODIFY_PATH=1` skips this;
+- create `java`, `javac`, ... shims there, so `java` runs your project's JDK (see
+  [JDKs and GraalVM](#jdks-and-graalvm)). Outside projects nothing changes until you run `jvm use`.
+  `JPM_NO_SHIMS=1` skips this.
+
+Open a new terminal afterwards. `JPM_VERSION=0.3.0` installs that version instead of the latest.
+
+**Upgrading:** `jpm upgrade` replaces jpm with the latest release (checksum-verified, in place) and
+refreshes the shims. `jpm upgrade --check` only reports; `jpm upgrade 0.3.0` installs a given version.
+
+**Releases** are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64) when a version
+tag such as `0.3.0` is pushed (no `v` prefix). The tag must match the version in `project.jsonc`, and
+nothing is published unless every platform passes.
 
 ## Getting started
 
@@ -66,9 +75,11 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `run <script> [args]` | Run a script from `scripts` (no shorthand) |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
 | `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports) |
-| `java list [--available [vendor]]` | Installed JDKs (`*` marks this project's), or what can be installed |
+| `help`, `--version` | Show the commands, or jpm's version |
+| `java list [--available [vendor]]` | Installed JDKs (`*` marks what `java` runs here), or what can be installed |
 | `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
 | `java use <java>` | Set `"java"` in the manifest, installing it if needed |
+| `java current` | Which JDK `java` runs here, and why. `jpm java …` and `jvm …` are the same commands |
 | `build --bundle` | Also build a runnable jar-in-jar bundle with isolated modules (`"package": "bundle"` makes it the default) |
 | `build --native` | Also build a native executable of `main` with GraalVM into `dist/` |
 | `start --trace` | Run under the native-image tracing agent, recording configuration for native builds |
@@ -125,10 +136,16 @@ classified jar.
 jpm add -r https://repo.example.dev/releases com.example:lib:1.0.0
 ```
 
-Other fields: `package` (`"jar"`, the default, or `"bundle"`), `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
-`src/test/resources`; set by `jpm import`), `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
-workspace root), `repositories` (extra Maven repositories), `defineClass` (name of the generated class),
-`javacArgs`. Unknown fields are errors, and every error names the file and line.
+Other fields:
+
+- `package`: `"jar"` (the default) or `"bundle"`, see [Bundles](#bundles-jar-in-jar-isolation)
+- `layout`: `"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`, `src/test/resources`
+  (set by `jpm import`)
+- `group`; `visibility` (`public`/`internal`, workspaces); `workspace` (module list, on a workspace root)
+- `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
+- `javacArgs`, `nativeArgs` (extra flags for javac and native-image)
+
+Unknown fields are errors, and every error names the file and line.
 
 Layout: `src/`, `test/` (`test/resources/` on the test classpath), `assets/` (copied into the jar as is),
 `scripts/`, `patches/`, `.cache/` (build cache, not committed), `dist/` (jars), `.changeset/` (reserved).
@@ -147,7 +164,8 @@ mirrors under `~/.jpm/git`. Versions are npm-style ranges matched against tags, 
 `#branch`. A tag must match the version in that commit's manifest; untagged commits are versioned like
 `1.3.0+a1b2c3d`. Git packages are built from source with the consuming project's resolved versions
 and cached in `~/.jpm/builds`, keyed by commit, patch, define values, classpath and JDK. A repository
-without a `project.jsonc` fails with a clear error until step 3.
+without a `project.jsonc` is imported from its `pom.xml` or Gradle build (see
+[Importing](#importing-maven-and-gradle-projects)); one with neither fails with a clear error.
 
 **Lockfile.** `project.lock` is sorted JSONC with one line per package: exact version, tag and commit
 for Git, a SHA-256 for Maven jars (verified on every install), and its edges. It is reused as long as
@@ -248,8 +266,8 @@ scripts: Gradle builds of dependencies are always read as text. Imports are cach
 `graalvm-21` (GraalVM Community), `oracle-graalvm-21`, `mandrel-21`. A plain version accepts any vendor
 and installs Temurin if none is present. jpm uses an installed JDK when one matches (`JAVA_HOME` first)
 and otherwise downloads one through the [Foojay Disco API](https://api.foojay.io), verifies its SHA-256
-and unpacks it into `~/.jpm/jdks`. It never edits PATH, JAVA_HOME or shell profiles. Set
-`JPM_NO_INSTALL` to turn automatic installs off.
+and unpacks it into `~/.jpm/jdks`. Installing a JDK changes nothing outside that folder: no JAVA_HOME
+or shell profile edits. Set `JPM_NO_INSTALL` to turn automatic installs off.
 
 **`java` follows your project.** The installer puts shims for `java`, `javac`, `jar`, `jshell`,
 `native-image` and the other JDK tools into `~/.jpm/bin`, first on PATH. Each picks a JDK, then runs
@@ -281,9 +299,19 @@ jar and is picked up by native-image automatically.
 
 ## Environment variables
 
-`JPM_HOME` (default `~/.jpm`), `JPM_OFFLINE` / `--offline`, `JPM_NO_INSTALL`, `JPM_FOOJAY_URL` (mirror), `JPM_VERBOSE` / `-v`, `JPM_JVM_ARGS` (for
-`start`/`dev`), `JPM_MAVEN_CENTRAL` (mirror), `JPM_GIT_BASE_GITHUB` (and `_GITLAB`, `_CODEBERG`) to
-redirect a Git host, e.g. to a mirror or `file:///…` for tests.
+| Variable | |
+|---|---|
+| `JPM_HOME` | Where jpm keeps its cache, JDKs and shims (default `$HOME/.jpm`) |
+| `JPM_OFFLINE`, `--offline` | Use only what is cached |
+| `JPM_VERBOSE`, `-v` | Show what jpm runs and downloads |
+| `JPM_NO_INSTALL` | Never install JDKs automatically |
+| `JPM_JAVA` | JDK for the `java` shims in this shell, e.g. `21` |
+| `JPM_JVM_ARGS` | JVM options for `jpm start` and `jpm dev` |
+| `JPM_BUNDLE_CACHE` | Where bundles unpack their nested jars (default: the temp directory) |
+| `JPM_MAVEN_CENTRAL`, `JPM_FOOJAY_URL` | Mirrors for Maven Central and the JDK index |
+| `JPM_GIT_BASE_GITHUB` (`_GITLAB`, `_CODEBERG`) | Redirect a Git host, e.g. to a mirror or `file:///…` for tests |
+| `JPM_VERSION`, `JPM_NO_MODIFY_PATH`, `JPM_NO_SHIMS` | Install scripts: version, skip the PATH change, skip the shims |
+| `JPM_REPO`, `JPM_INSTALL_BASE` | Install scripts and `jpm upgrade`: another GitHub repository, or another download location |
 
 ## Not yet done
 
