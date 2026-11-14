@@ -287,7 +287,9 @@ Once `jpm build`, `jpm test` and CI are green:
 2. delete `target/` or `build/` output folders, and ignore jpm's instead: `.cache/` and `dist/`;
 3. commit `project.jsonc`, `project.lock` and the new `.gitignore` entries.
 
-IDE support for jpm (an IntelliJ plugin) is planned. Until then, keep the old build files if your IDE
+In IntelliJ IDEA, the [jpm plugin](https://github.com/NonSwag/jpm-intellij) opens the project from
+`project.jsonc` (modules, dependencies with sources, the JDK) and can run the migration for you: it shows
+what `jpm import` would write before writing it. With other IDEs, keep the old build files while the IDE
 needs them to open the project, and update them by hand when dependencies change.
 
 ## Troubleshooting
