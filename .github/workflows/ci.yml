@@ -149,7 +149,18 @@ jobs:
             # as a user runs it: no JPM_HOME, so it installs into ~/.jpm/bin of that home
             env -u JPM_HOME HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
             env -u JPM_HOME HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
-            test "$(grep -c '.jpm/bin' "$home/.bashrc")" = 1
+            test "$(grep -c '.jpm/env' "$home/.bashrc")" = 1
+            # something later in the startup file puts another JDK first; jpm must still win at the prompt
+            mkdir -p "$home/otherjdk/bin" && printf '#!/bin/sh\necho other-jdk\n' > "$home/otherjdk/bin/java" && chmod +x "$home/otherjdk/bin/java"
+            echo 'export PATH="$HOME/otherjdk/bin:$PATH"' >> "$home/.bashrc"
+            printf 'command -v java\n' | env -u JPM_HOME HOME="$home" bash -i 2>/dev/null | tee which.txt
+            grep -q '.jpm/bin/java' which.txt
+            if command -v zsh >/dev/null; then
+              env -u JPM_HOME HOME="$home" SHELL="$(command -v zsh)" "$home/.jpm/bin/jpm" jvm setup --no-shims
+              echo 'export PATH="$HOME/otherjdk/bin:$PATH"' >> "$home/.zshrc"
+              printf 'command -v java\n' | env -u JPM_HOME HOME="$home" zsh -i 2>/dev/null | tee which.txt
+              grep -q '.jpm/bin/java' which.txt
+            fi
             env -u JPM_HOME HOME="$home" bash -ic 'command -v jpm && jvm list && jpm --version'
             # the java shim: inside a project its "java", elsewhere `jvm use`, otherwise the java already on PATH
             test -L "$home/.jpm/bin/java"

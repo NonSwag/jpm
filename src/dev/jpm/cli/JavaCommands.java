@@ -48,7 +48,7 @@ final class JavaCommands {
               exec [java] <command...>        Run one command with a JDK (java is implied for -jar, .jar, -version)
               env <java>                      Print exports for this shell only: eval "$(jvm env 21)"
               home [java]                     Print the home directory of a JDK
-              setup [--remove]                Create (or remove) the java, javac, ... shims in ~/.jpm/bin
+              setup [--remove]                Create (or remove) the shims, and keep ~/.jpm/bin first on PATH
 
             How `java` is chosen (the shims in ~/.jpm/bin, first on PATH):
               1. inside a jpm project: its "java"     2. the default from `jvm use`
@@ -222,30 +222,46 @@ final class JavaCommands {
             Log.step("Removed", removed.isEmpty() ? "no shims" : String.join(", ", removed) + " from " + Shims.bin());
             return 0;
         }
-        List<String> done = Shims.install();
-        Log.step("Shims", String.join(", ", done) + Log.dim(" in " + Shims.bin()));
+        boolean noShims = args.remove("--no-shims");
+        if (!noShims) {
+            List<String> done = Shims.install();
+            Log.step("Shims", String.join(", ", done) + Log.dim(" in " + Shims.bin()));
+        }
+        ShellSetup.ensure(false);
         checkPathOrder();
         return 0;
     }
-
     /** Warns if another java comes before the shims on PATH. */
+    /**
+     * Explains what to do when another java comes before the shims in this shell. The shell setup fixes the
+     * order in new terminals (and at the next prompt), so usually only the current shell needs a nudge.
+     */
     static void checkPathOrder() {
         Path ours = Shims.bin().toAbsolutePath().normalize();
         String path = System.getenv("PATH");
         if (path == null) return;
+        boolean win = System.getProperty("os.name").toLowerCase().contains("win");
         for (String d : path.split(File.pathSeparator)) {
             if (d.isEmpty()) continue;
             Path dir = Path.of(d).toAbsolutePath().normalize();
             if (dir.equals(ours)) return;
-            boolean win = System.getProperty("os.name").toLowerCase().contains("win");
             if (Files.exists(dir.resolve(win ? "java.exe" : "java"))) {
-                Log.warn(dir + " comes before " + ours + " on PATH, so its java wins. Put " + ours + " first.");
+                if (win) {
+                    Log.warn(dir + " comes before " + ours + " on PATH, so its java wins. Entries in the system PATH come"
+                            + " before the user PATH on Windows; remove " + dir + " from the system PATH (System Properties"
+                            + " > Environment Variables), or move it after " + ours + ".");
+                } else if (ShellSetup.configured() && System.getenv("JPM_NO_MODIFY_PATH") == null) {
+                    Log.info("In this shell " + dir + " still comes before " + ours + ". New terminals put jpm first,"
+                            + " and so does your next prompt; to fix this one now, run:  . " + ShellSetup.envFile());
+                } else {
+                    Log.warn(dir + " comes before " + ours + " on PATH, so its java wins. Run `jvm setup` to keep "
+                            + ours + " first.");
+                }
                 return;
             }
         }
-        Log.warn(ours + " is not on PATH yet; open a new terminal (the installer adds it).");
-    }
-    private int env(List<String> args) {
+        Log.info(ours + " is not on PATH in this shell yet; open a new terminal, or run:  . " + ShellSetup.envFile());
+    }    private int env(List<String> args) {
         if (args.size() != 1) throw new JpmException("Usage: " + self + " env <java>");
         Jdk j = Toolchain.require(JavaSpec.parse(args.get(0)));
         boolean win = System.getProperty("os.name").toLowerCase().contains("win") && System.getenv("SHELL") == null;
@@ -300,6 +316,7 @@ final class JavaCommands {
                 Log.warn(e.getMessage());
             }
         }
+        ShellSetup.ensure(false);
         checkPathOrder();
         return 0;
     }}

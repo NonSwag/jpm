@@ -20,9 +20,11 @@ The scripts:
 
 - download the native binary for your platform and check it against the release's `SHA256SUMS`;
 - put `jpm` and `jvm` into `~/.jpm/bin`;
-- add that folder to your PATH, once: one marked line in your shell's startup file (`~/.zshrc`,
-  `~/.bashrc` and on macOS `~/.bash_profile`, fish's `conf.d/jpm.fish`, or `~/.profile`), or your user
-  PATH on Windows. `JPM_NO_MODIFY_PATH=1` skips this;
+- keep that folder first on your PATH: one marked line in your shell's startup file (`~/.zshrc`,
+  `~/.bashrc` and on macOS `~/.bash_profile`, or `~/.profile`) sources `~/.jpm/env`, which puts it
+  first and moves it back to the front before every prompt, so a JDK that something else prepends later
+  cannot shadow the shims (fish gets `conf.d/jpm.fish`; Windows gets the folder in the user PATH, but
+  the system PATH comes first there). `JPM_NO_MODIFY_PATH=1` skips this;
 - create `java`, `javac`, ... shims there, so `java` runs your project's JDK (see
   [JDKs and GraalVM](#jdks-and-graalvm)). Outside projects nothing changes until you run `jvm use`.
   `JPM_NO_SHIMS=1` skips this.
@@ -288,8 +290,8 @@ eval "$(jvm env graalvm-21)"  # this shell only
 jvm install temurin-17 · jvm list · jvm remove temurin-17 · jvm home 21 · jvm use --unset
 ```
 
-`jvm setup` creates the shims (the installer does this; `JPM_NO_SHIMS=1` skips it) and
-`jvm setup --remove` takes them away. `JPM_JAVA=21` overrides the choice for one shell or command.
+`jvm setup` creates the shims and the PATH setup (the installer does this, and `jpm upgrade` refreshes
+it; `JPM_NO_SHIMS=1` skips the shims) and `jvm setup --remove` takes the shims away. `JPM_JAVA=21` overrides the choice for one shell or command.
 
 **Native builds.** `jpm build --native` builds the jar, then runs native-image from a GraalVM of the
 project's Java version (any installed GraalVM-based JDK, else GraalVM Community, installed) and writes
