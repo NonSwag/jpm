@@ -101,6 +101,17 @@ public final class Project {
         } else {
             modules.add(new Module(p, dir, root));
         }
+        for (Module m : modules) {
+            List<String> legacy = m.manifest.layout.legacyFolders(m.dir);
+            if (!legacy.isEmpty()) {
+                List<String> moves = new ArrayList<>();
+                if (legacy.contains("assets/")) moves.add("git mv assets/* src/");
+                if (legacy.contains("test/resources/")) moves.add("git mv test/resources/* test/");
+                dev.jpm.util.Log.warn(m.name() + ": resources now live in src/ and test/ next to the sources, and "
+                        + String.join(" and ", legacy) + " " + (legacy.size() == 1 ? "is" : "are") + " no longer read. Move them: "
+                        + String.join(", ", moves));
+            }
+        }
         Set<String> names = new LinkedHashSet<>();
         for (Module m : modules) {
             if (!names.add(m.name())) throw new JpmException("Two workspace modules are named \"" + m.name() + "\"");

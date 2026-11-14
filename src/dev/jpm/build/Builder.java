@@ -1,5 +1,7 @@
 package dev.jpm.build;
 
+import dev.jpm.Layout;
+
 import dev.jpm.DepKey;
 import dev.jpm.Manifest;
 import dev.jpm.Project;
@@ -155,7 +157,6 @@ public final class Builder {
             if (p != null && p.kind == Graph.Kind.LOCAL) {
                 Project.Module mod = project.module(id.substring("workspace:".length()));
                 out.add(classesDir(mod));
-                if (Files.isDirectory(mod.assetsDir())) out.add(mod.assetsDir());
             } else {
                 out.addAll(paths(id, m));
             }
@@ -175,7 +176,6 @@ public final class Builder {
                 compileMain(mod);
                 List<Path> l = new ArrayList<>();
                 l.add(classesDir(mod));
-                if (Files.isDirectory(mod.assetsDir())) l.add(mod.assetsDir());
                 yield l;
             }
             case MAVEN -> p.hasJar ? List.of(mavenJar(p, consumer)) : List.of();
@@ -224,6 +224,7 @@ public final class Builder {
             String key = inputsKey(cp, proc);
             boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
                     classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key));
+            Resources.sync(resourceRoots(m.manifest.layout, m.dir, false), classesDir(m), m.cacheDir().resolve("resources.list"));
             if (ran) Log.step("Compiled", m.name() + " " + m.version() + Log.dim(" (" + jdk.id() + ", release " + release + ")"));
             compiledModules.put(m.name(), ran);
             return ran;
@@ -244,7 +245,6 @@ public final class Builder {
         attrs.put("Implementation-Version", m.version());
         List<Path> dirs = new ArrayList<>();
         dirs.add(classesDir(m));
-        if (Files.isDirectory(m.assetsDir())) dirs.add(m.assetsDir());
         Path stamp = m.cacheDir().resolve("jar.key");
         String key = treeKey(dirs) + attrs;
         if (Files.exists(jar) && Files.exists(stamp) && Fs.read(stamp).equals(key)) return jar;
@@ -255,6 +255,22 @@ public final class Builder {
         return jar;
     }
 
+    /** Where a module's resources come from: its resource folder, without .java files when sources share it. */
+    static List<Resources.Root> resourceRoots(Layout layout, Path dir, boolean tests) {
+        Path res = tests ? layout.testResources(dir) : layout.resources(dir);
+        return List.of(new Resources.Root(res, layout.mixed()));
+    }
+
+    /**
+     * A Git dependency's resources. Tags made with the earlier jpm layout keep them in {@code assets/}, and
+     * cannot be moved, so that folder is still read for them.
+     */
+    static List<Resources.Root> gitResourceRoots(Layout layout, Path dir) {
+        List<Resources.Root> roots = new ArrayList<>(resourceRoots(layout, dir, false));
+        if (layout == Layout.JPM && Files.isDirectory(dir.resolve("assets"))) roots.add(new Resources.Root(dir.resolve("assets"), false));
+        return roots;
+    }
+
     /** Compiles test sources. Returns false if the module has no tests. */
     public boolean compileTests(Project.Module m) {
         Path testDir = m.testDir();
@@ -262,13 +278,13 @@ public final class Builder {
         compileMain(m);
         List<Path> cp = new ArrayList<>();
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.TEST_COMPILE));
         List<Path> proc = m.manifest.deps(Manifest.Scope.DEV).isEmpty() ? List.of() : classpath(m, Cp.PROCESSOR);
         Jdk jdk = jdk(m.manifest);
         boolean ran = Compiler.compile(new Compiler.Request(m.name() + " tests", jdk, release(m.manifest, jdk), List.of(testDir),
                 cp, proc, testClassesDir(m), m.cacheDir().resolve("test-classes.state.json"), m.manifest.javacArgs,
                 inputsKey(cp, proc) + treeKey(List.of(classesDir(m)))));
+        Resources.sync(resourceRoots(m.manifest.layout, m.dir, true), testClassesDir(m), m.cacheDir().resolve("test-resources.list"));
         if (ran) Log.step("Compiled", m.name() + " tests");
         return true;
     }
@@ -276,10 +292,7 @@ public final class Builder {
     public List<Path> testRuntimeClasspath(Project.Module m) {
         List<Path> cp = new ArrayList<>();
         cp.add(testClassesDir(m));
-        Path res = m.testResourcesDir();
-        if (Files.isDirectory(res)) cp.add(res);
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.TEST_RUNTIME));
         return Compiler.distinct(cp);
     }
@@ -287,7 +300,6 @@ public final class Builder {
     public List<Path> runtimeClasspath(Project.Module m) {
         List<Path> cp = new ArrayList<>();
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.RUNTIME));
         return Compiler.distinct(cp);
     }
@@ -638,9 +650,9 @@ public final class Builder {
             Path classes = buildDir.resolve("classes");
             Compiler.compile(new Compiler.Request(p.id, jdk, release, roots, cp, proc, classes,
                     buildDir.resolve("state.json"), mod.manifest().javacArgs, key));
+            Resources.sync(gitResourceRoots(mod.manifest().layout, src), classes, buildDir.resolve("resources.list"));
             List<Path> dirs = new ArrayList<>();
             dirs.add(classes);
-            if (Files.isDirectory(mod.manifest().layout.resources(src))) dirs.add(mod.manifest().layout.resources(src));
             Map<String, String> attrs = new LinkedHashMap<>();
             if (!mod.manifest().mains.isEmpty()) attrs.put("Main-Class", mod.manifest().mains.values().iterator().next());
             attrs.put("Implementation-Title", p.id);
