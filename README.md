@@ -62,6 +62,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `java list [--available [vendor]]` | Installed JDKs (`*` marks this project's), or what can be installed |
 | `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
 | `java use <java>` | Set `"java"` in the manifest, installing it if needed |
+| `build --bundle` | Also build a runnable jar-in-jar bundle with isolated modules (`"package": "bundle"` makes it the default) |
 | `build --native` | Also build a native executable of `main` with GraalVM into `dist/` |
 | `start --trace` | Run under the native-image tracing agent, recording configuration for native builds |
 | `<anything else>` | Runs extension `jpm-<name>` from `~/.jpm/bin` or `PATH`; install with `jpm add -g <dep>` |
@@ -110,7 +111,7 @@ A dependency is a version string, or an object with options:
 Exclusions apply to everything the dependency brings in, as in Maven. `jpm add g:a:classifier@1.0` adds a
 classified jar.
 
-Other fields: `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
+Other fields: `package` (`"jar"`, the default, or `"bundle"`), `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
 `src/test/resources`; set by `jpm import`), `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
 workspace root), `repositories` (extra Maven repositories), `defineClass` (name of the generated class),
 `javacArgs`. Unknown fields are errors, and every error names the file and line.
@@ -175,6 +176,28 @@ classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts an
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
+## Bundles (jar-in-jar isolation)
+
+`jpm build --bundle` (or `"package": "bundle"`) writes `dist/<name>-<version>-bundle.jar`, which runs
+with `java -jar`. Nothing is shaded: the app and every dependency stay untouched jars inside it.
+
+- The app and its dependencies load in a **shared** class loader whose parent is the JDK.
+- Each **internal** implementation module (an `internal` workspace module pulled in by a `public` one,
+  locally or from Git) gets its own **isolated** loader. It checks its own jars first, holding the
+  module and the dependencies only it uses. The API module's packages and the JDK always come from the
+  shared loader, so types match on both sides.
+- The context class loader sees every isolated module, so registries that look implementations up by
+  name (`ServiceLoader`, `Class.forName(name, true, contextLoader)`) find them, while the registry
+  classes themselves stay in the shared loader.
+- jpm generates the launcher and class loaders, compiled for the module's target (Java 8 or newer).
+  Nested jars are unpacked once into a cache directory named after the bundle's contents
+  (`$JPM_BUNDLE_CACHE`, or the temp directory).
+
+Isolation controls what each part of the program can see: the app cannot reach an implementation's
+private dependencies, and an implementation's dependencies never leak onto the app's classpath. Versions
+are still resolved once for the whole graph, so an isolated module cannot use a different version of a
+package that the app also uses.
+
 ## Importing Maven and Gradle projects
 
 ```sh
@@ -238,8 +261,7 @@ redirect a Git host, e.g. to a mirror or `file:///…` for tests.
 ## Not yet done
 
 - Maven and Gradle features with no manifest equivalent: code-generating plugins, Kotlin.
-- Jar-in-jar isolation with generated launcher and class loaders. Packaging is an open question in
-  the spec; `build` produces plain jars for now.
+- Separate version resolution for isolated modules (today one version per package across a bundle).
 - Running the tracing agent automatically during tests (an open question); for now `start --trace`
   records what one run of the app does.
 - Hot reload is restart-based; in-process reload (JetBrains Runtime or similar) is an open question.

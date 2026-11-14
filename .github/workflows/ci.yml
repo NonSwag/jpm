@@ -124,6 +124,17 @@ jobs:
           cp -r fixtures/gradle-demo "$work/gradle-static"
           (cd "$work/gradle-static" && "$JPM" import --static && "$JPM" build && cd app && "$JPM" start | grep -q "core,lombok,ObjectMapper")
 
+      - name: Build and run a jar-in-jar bundle
+        run: |
+          set -eux
+          JPM="$PWD/dist/jpm${{ matrix.exe }}"
+          cp -r fixtures/bundle-demo "$RUNNER_TEMP/bundle-demo"
+          cd "$RUNNER_TEMP/bundle-demo"
+          "$JPM" build
+          java -jar app/dist/app-1.0.0-bundle.jar | tee out.txt
+          grep -q "Hello Bundle" out.txt
+          grep -q "implementation dependencies visible to the app: false" out.txt
+
       - name: Test the install script against this build
         run: |
           set -eux

@@ -47,6 +47,7 @@ public final class Main {
               java remove <java>          Remove a JDK jpm installed
               java use <java>             Set "java" in the manifest (and install it)
               jvm exec <java> -- <cmd>    Run a command with a JDK, changing nothing persistent
+              build --bundle              Also build a runnable jar-in-jar bundle with isolated modules
               build --native              Also build a native executable with GraalVM
               start --trace               Run under the native-image tracing agent to record its config
 

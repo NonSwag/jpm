@@ -1,0 +1,1 @@
+{ "name": "bundle-demo", "version": "1.0.0", "workspace": ["api", "impl", "app"] }

@@ -109,6 +109,11 @@ public final class Graph {
      * @return package ids in breadth-first order
      */
     public List<String> closure(Collection<Edge> roots, boolean compileOnly) {
+        return closure(roots, compileOnly, Set.of());
+    }
+
+    /** Like {@link #closure(Collection, boolean)}, but neither includes nor walks through the ids in {@code stop}. */
+    public List<String> closure(Collection<Edge> roots, boolean compileOnly, Set<String> stop) {
         Map<String, List<Set<String>>> seen = new HashMap<>();
         LinkedHashSet<String> order = new LinkedHashSet<>();
         Deque<Object[]> queue = new ArrayDeque<>();
@@ -121,6 +126,7 @@ public final class Graph {
             String id = (String) item[0];
             @SuppressWarnings("unchecked")
             Set<String> ex = (Set<String>) item[1];
+            if (stop.contains(id)) continue;
             List<Set<String>> prior = seen.computeIfAbsent(id, k -> new ArrayList<>());
             boolean covered = false;
             for (Set<String> s : prior) if (ex.containsAll(s)) { covered = true; break; }

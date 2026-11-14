@@ -110,6 +110,17 @@ class BuildTest {
     }
 
     @Test
+    void bundleLauncherCompilesForJava8(@TempDir Path dir) {
+        Jdk jdk = Toolchain.require(JavaSpec.any());
+        Fs.write(dir.resolve("src/dev/jpm/bundle/Launcher.java"), BundleLauncher.LAUNCHER);
+        assertTrue(Compiler.compile(new Compiler.Request("launcher", jdk, 8, List.of(dir.resolve("src")), List.of(), List.of(),
+                dir.resolve("out"), dir.resolve("state.json"), List.of("-nowarn"), "k")));
+        for (String c : List.of("Launcher", "IsolatedLoader", "ContextLoader")) {
+            assertTrue(Files.exists(dir.resolve("out/dev/jpm/bundle/" + c + ".class")), c);
+        }
+    }
+
+    @Test
     void incrementalCompile(@TempDir Path dir) {
         Jdk jdk = Toolchain.require(JavaSpec.any());
         Path src = dir.resolve("src");

@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "java": "17",
+  "main": "demo.app.Main",
+  "package": "bundle",
+  "runtime": {
+    "workspace:api": "*",
+    // the implementation is loaded at runtime, in its own class loader inside the bundle
+    "workspace:impl": { "version": "*", "runtimeOnly": true }
+  }
+}

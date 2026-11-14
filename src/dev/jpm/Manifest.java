@@ -67,6 +67,8 @@ public final class Manifest {
     public final List<String> javacArgs;
     public final List<String> nativeArgs;
     public final Layout layout;
+    /** What `jpm build` produces: "jar" (default) or "bundle" (jar-in-jar with isolated modules). */
+    public final String packaging;
 
     private Manifest(Path file, String source) {
         this.file = file;
@@ -80,7 +82,7 @@ public final class Manifest {
 
         Set<String> known = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
                 "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-                "javacArgs", "nativeArgs", "layout", "description", "license", "$schema");
+                "javacArgs", "nativeArgs", "layout", "package", "description", "license", "$schema");
         for (Jsonc.Member m : root.members.values()) {
             if (!known.contains(m.key)) {
                 throw new JpmException(file + ":" + line(m.keyStart) + ": unknown field \"" + m.key + "\"");
@@ -168,6 +170,8 @@ public final class Manifest {
         this.repositories = stringList("repositories");
         this.javacArgs = stringList("javacArgs");
         this.nativeArgs = stringList("nativeArgs");
+        this.packaging = str("package", false) == null ? "jar" : str("package", false);
+        if (!packaging.equals("jar") && !packaging.equals("bundle")) throw err(root.get("package"), "package must be \"jar\" or \"bundle\"");
         this.layout = Layout.named(str("layout", false));
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
     }

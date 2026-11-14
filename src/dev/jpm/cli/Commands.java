@@ -450,6 +450,7 @@ final class Commands {
     int build(List<String> args) {
         boolean release = flag(args, "--release");
         boolean nativeImage = flag(args, "--native");
+        boolean bundleFlag = flag(args, "--bundle");
         boolean frozen = flag(args, "--frozen");
         String profile = option(args, "--profile");
         if (release && profile == null) profile = "release";
@@ -463,6 +464,10 @@ final class Commands {
         for (Project.Module m : mods) {
             Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
             b.jar(m);
+            if (bundleFlag || m.manifest.packaging.equals("bundle")) {
+                if (!m.manifest.mains.isEmpty()) b.bundle(m);
+                else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to bundle");
+            }
             if (nativeImage) {
                 if (!m.manifest.mains.isEmpty()) b.nativeImage(m, null);
                 else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to build natively");
