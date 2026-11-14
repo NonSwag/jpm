@@ -24,21 +24,34 @@ public record GitModule(DepKey key, String commit, Manifest root, Manifest manif
         return "public".equals(manifest.visibility);
     }
 
+    private static final Map<String, GitModule> MEMO = new java.util.concurrent.ConcurrentHashMap<>();
+
     public static GitModule locate(DepKey key, String commit) {
+        String memoKey = key + "@" + commit;
+        GitModule cached = MEMO.get(memoKey);
+        if (cached != null) return cached;
+        GitModule m = locateUncached(key, commit);
+        MEMO.put(memoKey, m);
+        return m;
+    }
+
+    private static GitModule locateUncached(DepKey key, String commit) {
         GitRepo repo = GitRepo.of(key);
         repo.ensureCommit(commit);
-        String rootText = repo.show(commit, Manifest.FILE);
+        // Manifests come from the repository, or from importing its Maven or Gradle build.
+        java.util.function.Function<String, String> read = rel -> repo.show(commit, rel.isEmpty() ? Manifest.FILE : rel + "/" + Manifest.FILE);
+        String rootText = read.apply("");
         if (rootText == null) {
-            throw new JpmException(key.repoKey() + " has no " + Manifest.FILE + " at its root (commit " + commit.substring(0, 7)
-                    + "). Only repositories with a jpm manifest can be used as dependencies for now;"
-                    + " importing Maven and Gradle builds is planned.");
+            java.util.Map<String, String> imported = ImportedRepo.manifests(key, commit);
+            read = imported::get;
+            rootText = read.apply("");
         }
         Manifest root = Manifest.parse(Path.of(key.repoKey() + "@" + commit.substring(0, 7), Manifest.FILE), rootText);
         Map<String, String> siblings = new LinkedHashMap<>(); // module name -> subdir
         Map<String, Manifest> manifests = new LinkedHashMap<>();
         if (root.isWorkspaceRoot()) {
             for (String rel : root.workspace) {
-                String text = repo.show(commit, rel + "/" + Manifest.FILE);
+                String text = read.apply(rel);
                 if (text == null) throw new JpmException(key.repoKey() + ": workspace module \"" + rel + "\" has no " + Manifest.FILE);
                 Manifest m = Manifest.parse(Path.of(key.repoKey() + "@" + commit.substring(0, 7), rel, Manifest.FILE), text);
                 siblings.put(m.name, rel);

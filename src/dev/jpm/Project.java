@@ -44,6 +44,11 @@ public final class Project {
             return "workspace:" + name();
         }
 
+        public Path srcDir() { return manifest.layout.sources(dir); }
+        public Path assetsDir() { return manifest.layout.resources(dir); }
+        public Path testDir() { return manifest.layout.tests(dir); }
+        public Path testResourcesDir() { return manifest.layout.testResources(dir); }
+
         public boolean isPublic() {
             return "public".equals(manifest.visibility);
         }

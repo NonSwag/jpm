@@ -108,6 +108,22 @@ jobs:
           ./dist/smoke${{ matrix.exe }} | tee native.txt
           grep -q "Hello from smoke! ko App.Pair(a=x, b=y)" native.txt
 
+      - name: Import real Maven and Gradle builds
+        run: |
+          set -eux
+          JPM="$PWD/dist/jpm${{ matrix.exe }}"
+          work="$RUNNER_TEMP/imports"
+          rm -rf "$work" && mkdir -p "$work"
+          # A real-world Maven project: parent POM chain, managed versions, Java 8 target.
+          git clone -q --depth 1 --branch rel/commons-lang-3.17.0 https://github.com/apache/commons-lang.git "$work/commons-lang"
+          (cd "$work/commons-lang" && "$JPM" import && "$JPM" build && test -f dist/commons-lang3-3.17.0.jar)
+          # A Gradle build, read by running Gradle ...
+          cp -r fixtures/gradle-demo "$work/gradle-model"
+          (cd "$work/gradle-model" && "$JPM" import && "$JPM" build && "$JPM" test && cd app && "$JPM" start | tee out.txt && grep -q "core,lombok,ObjectMapper" out.txt)
+          # ... and as text, without running anything.
+          cp -r fixtures/gradle-demo "$work/gradle-static"
+          (cd "$work/gradle-static" && "$JPM" import --static && "$JPM" build && cd app && "$JPM" start | grep -q "core,lombok,ObjectMapper")
+
       - name: Test the install script against this build
         run: |
           set -eux

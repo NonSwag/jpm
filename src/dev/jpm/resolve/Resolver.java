@@ -101,7 +101,7 @@ public final class Resolver {
     /** Effective dependencies of a module, including implicit ones (JUnit for tests). */
     public static List<Manifest.Dependency> effectiveDeps(Project.Module m) {
         List<Manifest.Dependency> deps = new ArrayList<>(m.manifest.dependencies);
-        boolean hasTests = Files.isDirectory(m.dir.resolve("test"));
+        boolean hasTests = Files.isDirectory(m.testDir());
         boolean hasFramework = deps.stream().anyMatch(d -> d.scope() == Manifest.Scope.TEST && d.key().isMaven()
                 && (d.key().group().startsWith("org.junit") || d.key().group().equals("junit")
                 || d.key().group().equals("org.testng") || d.key().group().startsWith("io.kotest")

@@ -155,7 +155,7 @@ public final class Builder {
             if (p != null && p.kind == Graph.Kind.LOCAL) {
                 Project.Module mod = project.module(id.substring("workspace:".length()));
                 out.add(classesDir(mod));
-                if (Files.isDirectory(mod.dir.resolve("assets"))) out.add(mod.dir.resolve("assets"));
+                if (Files.isDirectory(mod.assetsDir())) out.add(mod.assetsDir());
             } else {
                 out.addAll(paths(id, m));
             }
@@ -175,7 +175,7 @@ public final class Builder {
                 compileMain(mod);
                 List<Path> l = new ArrayList<>();
                 l.add(classesDir(mod));
-                if (Files.isDirectory(mod.dir.resolve("assets"))) l.add(mod.dir.resolve("assets"));
+                if (Files.isDirectory(mod.assetsDir())) l.add(mod.assetsDir());
                 yield l;
             }
             case MAVEN -> p.hasJar ? List.of(mavenJar(p, consumer)) : List.of();
@@ -210,7 +210,7 @@ public final class Builder {
             Jdk jdk = jdk(m.manifest);
             int release = release(m.manifest, jdk);
             List<Path> roots = new ArrayList<>();
-            roots.add(m.dir.resolve("src"));
+            roots.add(m.srcDir());
             List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
             Path gen = m.cacheDir().resolve("generated");
             if (!defs.isEmpty() || m.manifest.defineClass != null) {
@@ -244,7 +244,7 @@ public final class Builder {
         attrs.put("Implementation-Version", m.version());
         List<Path> dirs = new ArrayList<>();
         dirs.add(classesDir(m));
-        if (Files.isDirectory(m.dir.resolve("assets"))) dirs.add(m.dir.resolve("assets"));
+        if (Files.isDirectory(m.assetsDir())) dirs.add(m.assetsDir());
         Path stamp = m.cacheDir().resolve("jar.key");
         String key = treeKey(dirs) + attrs;
         if (Files.exists(jar) && Files.exists(stamp) && Fs.read(stamp).equals(key)) return jar;
@@ -257,12 +257,12 @@ public final class Builder {
 
     /** Compiles test sources. Returns false if the module has no tests. */
     public boolean compileTests(Project.Module m) {
-        Path testDir = m.dir.resolve("test");
+        Path testDir = m.testDir();
         if (Fs.files(testDir, ".java").isEmpty()) return false;
         compileMain(m);
         List<Path> cp = new ArrayList<>();
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.TEST_COMPILE));
         List<Path> proc = m.manifest.deps(Manifest.Scope.DEV).isEmpty() ? List.of() : classpath(m, Cp.PROCESSOR);
         Jdk jdk = jdk(m.manifest);
@@ -276,10 +276,10 @@ public final class Builder {
     public List<Path> testRuntimeClasspath(Project.Module m) {
         List<Path> cp = new ArrayList<>();
         cp.add(testClassesDir(m));
-        Path res = m.dir.resolve("test").resolve("resources");
+        Path res = m.testResourcesDir();
         if (Files.isDirectory(res)) cp.add(res);
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.TEST_RUNTIME));
         return Compiler.distinct(cp);
     }
@@ -287,7 +287,7 @@ public final class Builder {
     public List<Path> runtimeClasspath(Project.Module m) {
         List<Path> cp = new ArrayList<>();
         cp.add(classesDir(m));
-        if (Files.isDirectory(m.dir.resolve("assets"))) cp.add(m.dir.resolve("assets"));
+        if (Files.isDirectory(m.assetsDir())) cp.add(m.assetsDir());
         cp.addAll(classpath(m, Cp.RUNTIME));
         return Compiler.distinct(cp);
     }
@@ -489,7 +489,7 @@ public final class Builder {
 
             Log.step("Building", p.id + " " + p.version + Log.dim(" (" + p.commit.substring(0, 7) + ")"));
             List<Path> roots = new ArrayList<>();
-            roots.add(src.resolve("src"));
+            roots.add(mod.manifest().layout.sources(src));
             if (!defs.isEmpty() || mod.manifest().defineClass != null) {
                 String fqcn = Defines.className(mod.manifest());
                 Path gen = buildDir.resolve("generated");
@@ -501,7 +501,7 @@ public final class Builder {
                     buildDir.resolve("state.json"), mod.manifest().javacArgs, key));
             List<Path> dirs = new ArrayList<>();
             dirs.add(classes);
-            if (Files.isDirectory(src.resolve("assets"))) dirs.add(src.resolve("assets"));
+            if (Files.isDirectory(mod.manifest().layout.resources(src))) dirs.add(mod.manifest().layout.resources(src));
             Map<String, String> attrs = new LinkedHashMap<>();
             if (!mod.manifest().mains.isEmpty()) attrs.put("Main-Class", mod.manifest().mains.values().iterator().next());
             attrs.put("Implementation-Title", p.id);

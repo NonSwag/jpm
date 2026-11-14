@@ -3,10 +3,11 @@
 A single CLI for Java in the spirit of Bun, Cargo and Go: dependencies, builds, running, tests,
 patches and build-time defines, driven by one `project.jsonc`. The command is `jpm`.
 
-This covers **roadmap steps 1 and 2** of the spec: the build tool itself (manifest, lockfile, resolution
-from Git and Maven Central, building, running, defines, env files, patches, workspaces, tests, scripts,
-hooks, extensions) and JDK/GraalVM management with native builds (`jpm java`, `jvm`,
-`build --native`). Importing Maven and Gradle projects is step 3.
+This covers **all three roadmap steps** of the spec: the build tool itself (manifest, lockfile,
+resolution from Git and Maven Central, building, running, defines, env files, patches, workspaces,
+tests, scripts, hooks, extensions), JDK/GraalVM management with native builds (`jpm java`, `jvm`,
+`build --native`), and importing and building existing Maven and Gradle projects (`jpm import`, and Git
+dependencies without a `project.jsonc`).
 
 ## Install
 
@@ -53,6 +54,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `install [--frozen]` | Resolve and write `project.lock`; `--frozen` fails if the lock is stale (CI) |
 | `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them |
 | `outdated`, `why <dep>` | Inspect the graph |
+| `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |
 | `build`, `start`, `test`, `clean` | Build into `dist/`, run main with production env, run tests, delete output |
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
 | `run <script> [args]` | Run a script from `scripts` (no shorthand) |
@@ -95,7 +97,8 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 }
 ```
 
-Other fields: `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
+Other fields: `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
+`src/test/resources`; set by `jpm import`), `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
 workspace root), `repositories` (extra Maven repositories), `defineClass` (name of the generated class),
 `javacArgs`. Unknown fields are errors, and every error names the file and line.
 
@@ -159,6 +162,36 @@ classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts an
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
+## Importing Maven and Gradle projects
+
+```sh
+cd some-maven-or-gradle-project
+jpm import --dry-run      # show the manifests it would write, and what does not carry over
+jpm import                # write project.jsonc (one per module) and project.lock
+jpm build && jpm test
+```
+
+Files stay where they are: imported manifests use `"layout": "maven"`. Multi-module builds become a
+workspace, and module-to-module dependencies become `workspace:` dependencies.
+
+- **Maven** is read from the effective model (parent POMs on disk or from Maven Central, properties,
+  dependency management and BOMs). Scopes map as compile and runtime → `runtime`, provided → `dev`,
+  test → `test`; annotation processor paths go to `dev`. Java versions, main classes (jar, exec, shade,
+  assembly and Spring Boot plugins) and extra repositories carry over.
+- **Gradle** is read by running Gradle (`gradlew`, else `gradle`) with an init script that reports the
+  evaluated model, so plugins, conventions and version catalogs are taken into account. `--static`
+  reads `settings.gradle(.kts)`, `build.gradle(.kts)`, `gradle.properties` and
+  `gradle/libs.versions.toml` as text instead, executing nothing; this is also the fallback when Gradle
+  is not installed. Versions managed by platforms (BOMs) are read from the BOM's POM.
+
+Anything without a jpm equivalent is listed as a warning: exclusions, classifiers, plugins that generate
+code, Kotlin sources, custom source directories, `runtimeOnly` (jpm has no runtime-only scope).
+
+**Git dependencies without a `project.jsonc`** are imported the same way when they have a `pom.xml` or
+a Gradle build, then built from source like any Git dependency. jpm never runs a dependency's build
+scripts: Gradle builds of dependencies are always read as text. Imports are cached per commit in
+`~/.jpm/imported`.
+
 ## JDKs and GraalVM
 
 `"java"` names the JDK: `21`, `21.0.5`, or vendor-version such as `temurin-17`, `zulu-21`, `corretto-21`,
@@ -191,7 +224,8 @@ redirect a Git host, e.g. to a mirror or `file:///…` for tests.
 
 ## Not yet done
 
-- **Step 3:** importing Maven and Gradle builds.
+- Maven and Gradle features with no manifest equivalent yet: dependency exclusions, classifiers,
+  runtime-only dependencies, code-generating plugins, Kotlin.
 - Jar-in-jar isolation with generated launcher and class loaders. Packaging is an open question in
   the spec; `build` produces plain jars for now.
 - Running the tracing agent automatically during tests (an open question); for now `start --trace`

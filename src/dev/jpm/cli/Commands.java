@@ -501,7 +501,7 @@ final class Commands {
     /** Where the tracing agent writes configuration: inside assets/, so it ships in the jar. */
     static Path traceDir(Project.Module m) {
         String group = m.manifest.group != null ? m.manifest.group : m.name();
-        return m.dir.resolve("assets").resolve("META-INF").resolve("native-image").resolve(group).resolve(m.name());
+        return m.assetsDir().resolve("META-INF").resolve("native-image").resolve(group).resolve(m.name());
     }
 
     List<String> javaCommand(Builder b, Project.Module m, String entry, List<String> appArgs, boolean trace) {
@@ -602,6 +602,41 @@ final class Commands {
         Fs.deleteTree(p.dir.resolve(".cache").resolve("build"));
         for (Project.Module m : p.modules) Fs.deleteTree(m.dir.resolve("dist"));
         Log.step("Cleaned", "build output");
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- import
+
+    int importBuild(List<String> args) {
+        boolean dryRun = flag(args, "--dry-run", "-n");
+        boolean force = flag(args, "--force", "-f");
+        boolean noInstall = flag(args, "--no-install");
+        boolean staticRead = flag(args, "--static");
+        noMoreFlags(args);
+        Path dir = args.isEmpty() ? cwd : cwd.resolve(args.get(0)).normalize();
+        dev.jpm.importer.Imported imp = dev.jpm.importer.Importer.run(dir, new MavenRepo(List.of()), staticRead);
+        if (!dryRun && !force) {
+            for (String rel : imp.manifests.keySet()) {
+                Path f = dir.resolve(rel).resolve(Manifest.FILE);
+                if (Files.exists(f)) throw new JpmException(dir.relativize(f) + " already exists; use --force to overwrite it");
+            }
+        }
+        for (String rel : imp.manifests.keySet()) {
+            String text = imp.render(rel);
+            Path f = dir.resolve(rel).resolve(Manifest.FILE);
+            if (dryRun) {
+                System.out.println(Log.bold("// " + (rel.isEmpty() ? "" : rel + "/") + Manifest.FILE));
+                System.out.println(text);
+            } else {
+                Fs.write(f, text);
+                Log.step("Imported", (rel.isEmpty() ? "" : rel + "/") + Manifest.FILE + " from " + imp.tool);
+            }
+        }
+        for (String w : imp.warnings) Log.warn(w);
+        if (dryRun || noInstall) return 0;
+        Project p = Project.load(dir);
+        Install.run(p, new MavenRepo(p.root.repositories), new Install.Options(false, false, Set.of(), false));
+        Log.info("Next: `jpm build` and `jpm test`. Sources stay where they are (\"layout\": \"maven\").");
         return 0;
     }
 

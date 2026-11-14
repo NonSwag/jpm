@@ -27,6 +27,7 @@ public final class Main {
               update [dep...]             Re-resolve within ranges (--latest goes past them)
               outdated                    Show dependencies with newer versions
               why <dep>                   Show why a dependency is in the graph
+              import [dir]                Create project.jsonc from a Maven or Gradle build (--dry-run, --force)
 
             Build and run
               build                       Compile and package into dist/ (--release, --profile <name>)
@@ -74,12 +75,35 @@ public final class Main {
     /** True when started as {@code jvm} (a link or copy of the binary, or the jvm launcher script). */
     static boolean invokedAsJvm() {
         if ("jvm".equals(System.getenv("JPM_AS"))) return true;
+        return isJvmName(invokedName());
+    }
+
+    static boolean isJvmName(String path) {
+        if (path == null || path.isEmpty()) return false;
+        String name = path.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).toLowerCase();
+        return name.equals("jvm") || name.equals("jvm.exe");
+    }
+
+    /**
+     * The name the program was started under. On Linux the executable path resolves symlinks (a `jvm`
+     * symlink would read as `jpm`), so argv[0] is taken from /proc/self/cmdline instead.
+     */
+    private static String invokedName() {
         try {
-            String cmd = ProcessHandle.current().info().command().orElse("");
-            String name = java.nio.file.Path.of(cmd).getFileName().toString().toLowerCase();
-            return name.equals("jvm") || name.equals("jvm.exe");
+            java.nio.file.Path cmdline = java.nio.file.Path.of("/proc/self/cmdline");
+            if (java.nio.file.Files.isReadable(cmdline)) {
+                byte[] b = java.nio.file.Files.readAllBytes(cmdline);
+                int end = 0;
+                while (end < b.length && b[end] != 0) end++;
+                if (end > 0) return new String(b, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (java.io.IOException | RuntimeException ignored) {
+        }
+        try {
+            return ProcessHandle.current().info().command().orElse("");
         } catch (RuntimeException e) {
-            return false;
+            return "";
         }
     }
 
@@ -135,6 +159,7 @@ public final class Main {
             case "run" -> c.runScript(args);
             case "clean" -> c.clean(args);
             case "patch" -> c.patch(args);
+            case "import" -> c.importBuild(args);
             case "java" -> c.java(args, false);
             case "jvm" -> c.java(args, true);
             default -> c.extension(cmd, args);

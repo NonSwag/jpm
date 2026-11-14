@@ -58,6 +58,7 @@ public final class Manifest {
     public final String defineClass;
     public final List<String> javacArgs;
     public final List<String> nativeArgs;
+    public final Layout layout;
 
     private Manifest(Path file, String source) {
         this.file = file;
@@ -71,7 +72,7 @@ public final class Manifest {
 
         Set<String> known = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
                 "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-                "javacArgs", "nativeArgs", "description", "license", "$schema");
+                "javacArgs", "nativeArgs", "layout", "description", "license", "$schema");
         for (Jsonc.Member m : root.members.values()) {
             if (!known.contains(m.key)) {
                 throw new JpmException(file + ":" + line(m.keyStart) + ": unknown field \"" + m.key + "\"");
@@ -160,6 +161,8 @@ public final class Manifest {
         this.repositories = stringList("repositories");
         this.javacArgs = stringList("javacArgs");
         this.nativeArgs = stringList("nativeArgs");
+        this.layout = Layout.named(str("layout", false));
+        if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
     }
 
     private Define parseDefine(Jsonc.Member e) {

@@ -38,6 +38,12 @@ public final class Pom {
     public final List<Dep> dependencies = new ArrayList<>();
     /** Relocation target as group:artifact:version, or null. */
     public String relocation;
+    /** The raw POM elements: this POM first, then its parents. */
+    public final List<Element> chain = new ArrayList<>();
+    /** Local file this POM was read from (null for POMs from a repository). */
+    public Path file;
+    /** Raw explicit properties of this POM and its parents (no built-ins), for importers. */
+    public final Map<String, String> declaredProperties = new LinkedHashMap<>();
 
     /** Loads POMs and builds effective models, memoized. */
     public static final class Loader {
@@ -57,21 +63,66 @@ public final class Pom {
             return p;
         }
 
+        /** Effective model of a POM on disk; parents are found through relativePath first, then the repository. */
+        public Pom loadFile(Path pomFile) {
+            Path f = pomFile.toAbsolutePath().normalize();
+            String key = "file:" + f;
+            Pom cached = memo.get(key);
+            if (cached != null) return cached;
+            Pom p = buildFrom(parseXml(f), f, null, null, null, new LinkedHashSet<>());
+            memo.put(key, p);
+            return p;
+        }
+
         private Pom build(String group, String artifact, String version, Set<String> stack) {
-            String key = group + ":" + artifact + ":" + version;
-            if (!stack.add(key)) throw new JpmException("Cycle in POM parents: " + stack);
             Path file = repo.require(group, artifact, version, null, "pom");
-            Element project = parseXml(file);
+            return buildFrom(parseXml(file), null, group, artifact, version, stack);
+        }
+
+        private Pom parentOf(Element parentEl, Path localFile, Set<String> stack) {
+            String pg = text(parentEl, "groupId"), pa = text(parentEl, "artifactId"), pv = text(parentEl, "version");
+            if (localFile != null) {
+                Element rp = child(parentEl, "relativePath");
+                String rel = rp == null ? "../pom.xml" : rp.getTextContent().trim();
+                if (!rel.isEmpty()) {
+                    Path cand = localFile.getParent().resolve(rel).normalize();
+                    if (java.nio.file.Files.isDirectory(cand)) cand = cand.resolve("pom.xml");
+                    if (java.nio.file.Files.isRegularFile(cand)) {
+                        Element pe = parseXml(cand);
+                        Element pp = child(pe, "parent");
+                        String g = or(text(pe, "groupId"), pp == null ? null : text(pp, "groupId"));
+                        String v = or(text(pe, "version"), pp == null ? null : text(pp, "version"));
+                        if (pa.equals(text(pe, "artifactId")) && pg.equals(g) && pv.equals(v)) {
+                            String key = "file:" + cand;
+                            Pom cached = memo.get(key);
+                            if (cached == null) {
+                                cached = buildFrom(pe, cand, null, null, null, stack);
+                                memo.put(key, cached);
+                            }
+                            return cached;
+                        }
+                    }
+                }
+            }
+            Pom parent = memo.get(pg + ":" + pa + ":" + pv);
+            if (parent == null) {
+                parent = build(pg, pa, pv, stack);
+                memo.put(pg + ":" + pa + ":" + pv, parent);
+            }
+            return parent;
+        }
+
+        private Pom buildFrom(Element project, Path localFile, String group, String artifact, String version, Set<String> stack) {
+            String key = localFile != null ? "file:" + localFile : group + ":" + artifact + ":" + version;
+            if (!stack.add(key)) throw new JpmException("Cycle in POM parents: " + stack);
             Pom pom = new Pom();
+            pom.file = localFile;
+            pom.chain.add(project);
             Pom parent = null;
             Element parentEl = child(project, "parent");
             if (parentEl != null) {
-                String pg = text(parentEl, "groupId"), pa = text(parentEl, "artifactId"), pv = text(parentEl, "version");
-                parent = memo.get(pg + ":" + pa + ":" + pv);
-                if (parent == null) {
-                    parent = build(pg, pa, pv, stack);
-                    memo.put(pg + ":" + pa + ":" + pv, parent);
-                }
+                parent = parentOf(parentEl, localFile, stack);
+                pom.chain.addAll(parent.chain);
             }
             pom.group = or(text(project, "groupId"), parent != null ? parent.group : group);
             pom.artifact = or(text(project, "artifactId"), artifact);
@@ -79,9 +130,13 @@ public final class Pom {
             pom.packaging = or(text(project, "packaging"), "jar");
 
             if (parent != null) pom.properties.putAll(parent.properties);
+            if (parent != null) pom.declaredProperties.putAll(parent.declaredProperties);
             Element props = child(project, "properties");
             if (props != null) {
-                for (Element e : children(props)) pom.properties.put(e.getTagName(), e.getTextContent().trim());
+                for (Element e : children(props)) {
+                    pom.properties.put(e.getTagName(), e.getTextContent().trim());
+                    pom.declaredProperties.put(e.getTagName(), e.getTextContent().trim());
+                }
             }
             pom.properties.put("project.groupId", pom.group);
             pom.properties.put("project.artifactId", pom.artifact);
