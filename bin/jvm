@@ -1,0 +1,3 @@
+#!/bin/sh
+# Launcher for `jvm` on the jar build of jpm. With the native binary, link or copy it as `jvm` instead.
+JPM_AS=jvm exec "$(dirname "$0")/jpm" "$@"

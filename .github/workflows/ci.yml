@@ -51,7 +51,7 @@ jobs:
         run: bin/jpm test --frozen
 
       - name: Native image
-        run: bin/jpm run native
+        run: bin/jpm build --native
 
       - name: Smoke test the native binary
         run: |
@@ -87,6 +87,25 @@ jobs:
           "$JPM" test
           "$JPM" install --frozen
           "$JPM" why org.apache.commons:commons-lang3
+
+      - name: Smoke test toolchains and native builds
+        run: |
+          set -eux
+          JPM="$PWD/dist/jpm${{ matrix.exe }}"
+          mkdir -p "$RUNNER_TEMP/bin"
+          JVM="$RUNNER_TEMP/bin/jvm${{ matrix.exe }}"
+          cp "$JPM" "$JVM"
+          "$JVM" exec temurin-17 -- java -version 2>&1 | tee jv.txt
+          grep -q 'version "17' jv.txt
+          "$JPM" java install zulu-21
+          "$JPM" java list
+          "$JPM" java remove zulu-21
+          cd "$RUNNER_TEMP/smoke"
+          "$JPM" start --trace
+          test -f assets/META-INF/native-image/smoke/smoke/reflect-config.json
+          "$JPM" build --native
+          ./dist/smoke${{ matrix.exe }} | tee native.txt
+          grep -q "Hello from smoke! ko App.Pair(a=x, b=y)" native.txt
 
       - uses: actions/upload-artifact@v4
         with:

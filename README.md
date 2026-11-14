@@ -3,10 +3,10 @@
 A single CLI for Java in the spirit of Bun, Cargo and Go: dependencies, builds, running, tests,
 patches and build-time defines, driven by one `project.jsonc`. The command is `jpm`.
 
-This is **roadmap step 1** of the spec: the build tool itself (manifest, lockfile, resolution from Git
-and Maven Central, building, running), plus the features that hang off it — defines, env files,
-patches, workspaces, tests, scripts, hooks and extensions. JDK/GraalVM management (`jpm java`, `jvm`)
-is step 2; importing Maven and Gradle projects is step 3.
+This covers **roadmap steps 1 and 2** of the spec: the build tool itself (manifest, lockfile, resolution
+from Git and Maven Central, building, running, defines, env files, patches, workspaces, tests, scripts,
+hooks, extensions) and JDK/GraalVM management with native builds (`jpm java`, `jvm`,
+`build --native`). Importing Maven and Gradle projects is step 3.
 
 ## Getting started
 
@@ -24,7 +24,7 @@ jpm build --release       # dist/hello-0.1.0.jar, runs postbuild:release hooks
 ```
 
 jpm has no dependencies of its own and compiles to a native binary with GraalVM
-(`jpm build && jpm run native`, with `GRAALVM_HOME` set). It builds and tests itself: `bin/jpm test`.
+(`jpm build --native`; jpm installs GraalVM if needed). It builds and tests itself: `bin/jpm test`.
 On Windows use `bin\jpm.cmd` for the jar build.
 
 CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the native binary on Linux
@@ -44,7 +44,11 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
 | `run <script> [args]` | Run a script from `scripts` (no shorthand) |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
-| `java list` | List the JDKs jpm can see |
+| `java list [--available [vendor]]` | Installed JDKs (`*` marks this project's), or what can be installed |
+| `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
+| `java use <java>` | Set `"java"` in the manifest, installing it if needed |
+| `build --native` | Also build a native executable of `main` with GraalVM into `dist/` |
+| `start --trace` | Run under the native-image tracing agent, recording configuration for native builds |
 | `<anything else>` | Runs extension `jpm-<name>` from `~/.jpm/bin` or `PATH`; install with `jpm add -g <dep>` |
 
 Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:artifact@[1.0,2.0)'`,
@@ -56,7 +60,7 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 {
   "name": "my-app",
   "version": "1.3.0",
-  "java": "graalvm-21",   // JDK to use; a plain JDK 21 stands in until step 2 installs GraalVM
+  "java": "graalvm-21",   // installed automatically if missing
   "target": "17",         // bytecode target (--release), defaults to java
   "main": "com.example.App",          // or { "cli": "...", "server": "..." } → jpm start server
   "runtime": {
@@ -142,21 +146,43 @@ classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts an
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
+## JDKs and GraalVM
+
+`"java"` names the JDK: `21`, `21.0.5`, or vendor-version such as `temurin-17`, `zulu-21`, `corretto-21`,
+`graalvm-21` (GraalVM Community), `oracle-graalvm-21`, `mandrel-21`. A plain version accepts any vendor
+and installs Temurin if none is present. jpm uses an installed JDK when one matches (`JAVA_HOME` first)
+and otherwise downloads one through the [Foojay Disco API](https://api.foojay.io), verifies its SHA-256
+and unpacks it into `~/.jpm/jdks`. It never edits PATH, JAVA_HOME or shell profiles. Set
+`JPM_NO_INSTALL` to turn automatic installs off.
+
+**`jvm`** is a separate command (link or copy the native `jpm` binary as `jvm`, or use `bin/jvm`) for
+using JDKs without changing anything persistent:
+
+```sh
+jvm exec 21 -- java -jar app.jar      # run with JDK 21 as JAVA_HOME and first on PATH
+eval "$(jvm env graalvm-21)"          # this shell only
+jvm install temurin-17 · jvm list · jvm remove temurin-17 · jvm home 21
+```
+
+**Native builds.** `jpm build --native` builds the jar, then runs native-image from a GraalVM of the
+project's Java version (any installed GraalVM-based JDK, else GraalVM Community, installed) and writes
+`dist/<name>`. Extra flags go in `"nativeArgs"`. `jpm start --trace` runs the app under the tracing
+agent and merges what it records into `assets/META-INF/native-image/<group>/<name>/`, which ships in the
+jar and is picked up by native-image automatically.
+
 ## Environment variables
 
-`JPM_HOME` (default `~/.jpm`), `JPM_OFFLINE` / `--offline`, `JPM_VERBOSE` / `-v`, `JPM_JVM_ARGS` (for
+`JPM_HOME` (default `~/.jpm`), `JPM_OFFLINE` / `--offline`, `JPM_NO_INSTALL`, `JPM_FOOJAY_URL` (mirror), `JPM_VERBOSE` / `-v`, `JPM_JVM_ARGS` (for
 `start`/`dev`), `JPM_MAVEN_CENTRAL` (mirror), `JPM_GIT_BASE_GITHUB` (and `_GITLAB`, `_CODEBERG`) to
 redirect a Git host, e.g. to a mirror or `file:///…` for tests.
 
 ## Not yet done
 
-- **Step 2:** installing JDKs and GraalVM (`jpm java`, `jvm exec 21 -- …`), native builds and the
-  tracing agent. `"java": "graalvm-21"` uses a plain JDK 21 if no GraalVM is installed, and a missing
-  JDK is an error that says so. The native build of jpm itself (`scripts/native.sh`) has not been tried
-  here because no GraalVM was available.
 - **Step 3:** importing Maven and Gradle builds.
 - Jar-in-jar isolation with generated launcher and class loaders. Packaging is an open question in
   the spec; `build` produces plain jars for now.
+- Running the tracing agent automatically during tests (an open question); for now `start --trace`
+  records what one run of the app does.
 - Hot reload is restart-based; in-process reload (JetBrains Runtime or similar) is an open question.
 - Changesets: `.changeset/` is reserved only. The IntelliJ plugin is a separate project.
 - The resolver is jpm's own rather than an embedded Coursier or Maven Resolver, to keep jpm free of

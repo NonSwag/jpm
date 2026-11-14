@@ -57,6 +57,7 @@ public final class Manifest {
     public final List<String> repositories;
     public final String defineClass;
     public final List<String> javacArgs;
+    public final List<String> nativeArgs;
 
     private Manifest(Path file, String source) {
         this.file = file;
@@ -70,7 +71,7 @@ public final class Manifest {
 
         Set<String> known = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
                 "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-                "javacArgs", "description", "license", "$schema");
+                "javacArgs", "nativeArgs", "description", "license", "$schema");
         for (Jsonc.Member m : root.members.values()) {
             if (!known.contains(m.key)) {
                 throw new JpmException(file + ":" + line(m.keyStart) + ": unknown field \"" + m.key + "\"");
@@ -158,6 +159,7 @@ public final class Manifest {
         this.workspace = stringList("workspace");
         this.repositories = stringList("repositories");
         this.javacArgs = stringList("javacArgs");
+        this.nativeArgs = stringList("nativeArgs");
     }
 
     private Define parseDefine(Jsonc.Member e) {

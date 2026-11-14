@@ -7,11 +7,14 @@ import dev.jpm.build.Builder;
 import dev.jpm.build.Compiler;
 import dev.jpm.build.Env;
 import dev.jpm.build.Jars;
-import dev.jpm.build.Jdk;
 import dev.jpm.build.Patches;
 import dev.jpm.build.Scripts;
 import dev.jpm.build.TestRunner;
 import dev.jpm.git.GitRepo;
+import dev.jpm.toolchain.Foojay;
+import dev.jpm.toolchain.JavaSpec;
+import dev.jpm.toolchain.Jdk;
+import dev.jpm.toolchain.Toolchain;
 import dev.jpm.json.Jsonc;
 import dev.jpm.json.JsoncEdit;
 import dev.jpm.maven.MavenRepo;
@@ -128,9 +131,10 @@ final class Commands {
         if (name.isEmpty()) name = "app";
         String pkg = name.toLowerCase().replaceAll("[^a-z0-9]", "");
         if (pkg.isEmpty() || !Character.isLetter(pkg.charAt(0))) pkg = "app" + pkg;
-        Integer major = null;
+        int major = 21;
         try {
-            major = Jdk.select(null, null, false).major();
+            Jdk found = Toolchain.find(JavaSpec.any());
+            major = found == null ? 21 : found.major();
         } catch (JpmException ignored) {
         }
         String manifest = """
@@ -141,7 +145,7 @@ final class Commands {
                   "runtime": {},
                   "test": {}
                 }
-                """.formatted(name, major == null ? "" : "\"java\": \"" + major + "\",\n  ", pkg);
+                """.formatted(name, "\"java\": \"" + major + "\",\n  ", pkg);
         Fs.write(cwd.resolve(Manifest.FILE), manifest);
         Path app = cwd.resolve("src").resolve(pkg).resolve("App.java");
         if (!Files.exists(app)) {
@@ -441,6 +445,7 @@ final class Commands {
 
     int build(List<String> args) {
         boolean release = flag(args, "--release");
+        boolean nativeImage = flag(args, "--native");
         boolean frozen = flag(args, "--frozen");
         String profile = option(args, "--profile");
         if (release && profile == null) profile = "release";
@@ -454,6 +459,10 @@ final class Commands {
         for (Project.Module m : mods) {
             Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
             b.jar(m);
+            if (nativeImage) {
+                if (!m.manifest.mains.isEmpty()) b.nativeImage(m, null);
+                else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to build natively");
+            }
             Scripts.hooks(b, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
         }
         if (all) Scripts.hooks(b, rootMod, c.project.root, "post", "build", profile, Env.Mode.PRODUCTION);
@@ -462,7 +471,9 @@ final class Commands {
 
     int start(List<String> args, boolean dev) {
         List<String> appArgs = passthrough(args);
+        boolean trace = flag(args, "--trace");
         noMoreFlags(args);
+        if (trace && dev) throw new JpmException("--trace works with `jpm start`, not `jpm dev`");
         String entry = args.isEmpty() ? null : args.remove(0);
         appArgs.addAll(0, args);
         Env.Mode mode = dev ? Env.Mode.DEVELOPMENT : Env.Mode.PRODUCTION;
@@ -471,19 +482,40 @@ final class Commands {
             Project.Module m = single(c.project, "run");
             Builder b = c.builder(mode);
             Scripts.hooks(b, m, m.manifest, "pre", "start", null, mode);
-            List<String> cmd = javaCommand(b, m, entry, appArgs);
-            return Exec.inherit(m.dir, cmd, Env.forChild(c.project.dir, mode));
+            List<String> cmd = javaCommand(b, m, entry, appArgs, trace);
+            int code = Exec.inherit(m.dir, cmd, Env.forChild(c.project.dir, mode));
+            if (trace) {
+                Log.step("Traced", "native-image configuration merged into "
+                        + m.dir.relativize(traceDir(m)) + "; `jpm build --native` uses it");
+            }
+            return code;
         }
         return new DevLoop(this, entry, appArgs).run();
     }
 
     /** Builds and returns the command that runs a module's main. Package-visible for DevLoop. */
     List<String> javaCommand(Builder b, Project.Module m, String entry, List<String> appArgs) {
+        return javaCommand(b, m, entry, appArgs, false);
+    }
+
+    /** Where the tracing agent writes configuration: inside assets/, so it ships in the jar. */
+    static Path traceDir(Project.Module m) {
+        String group = m.manifest.group != null ? m.manifest.group : m.name();
+        return m.dir.resolve("assets").resolve("META-INF").resolve("native-image").resolve(group).resolve(m.name());
+    }
+
+    List<String> javaCommand(Builder b, Project.Module m, String entry, List<String> appArgs, boolean trace) {
         String main = mainClass(m, entry);
         b.compileMain(m);
-        Jdk jdk = b.jdk(m.manifest);
+        Jdk jdk = trace ? b.graalvm(m.manifest) : b.jdk(m.manifest);
         List<String> cmd = new ArrayList<>();
         cmd.add(jdk.java());
+        if (trace) {
+            // merge into an earlier trace, or write a fresh one the first time
+            boolean earlier = Files.exists(traceDir(m).resolve("reflect-config.json"));
+            Fs.mkdirs(traceDir(m));
+            cmd.add("-agentlib:native-image-agent=config-" + (earlier ? "merge" : "output") + "-dir=" + traceDir(m));
+        }
         String opts = System.getenv("JPM_JVM_ARGS");
         if (opts != null && !opts.isBlank()) cmd.addAll(List.of(opts.trim().split("\\s+")));
         cmd.add("-cp");
@@ -590,18 +622,8 @@ final class Commands {
 
     // ---------------------------------------------------------------- java
 
-    int java(List<String> args) {
-        String sub = args.isEmpty() ? "list" : args.get(0);
-        if (sub.equals("list")) {
-            List<Jdk> all = Jdk.discover();
-            if (all.isEmpty()) Log.info("No JDKs found.");
-            for (Jdk j : all) {
-                System.out.println(String.format("%-28s %s", j.id() + " (" + j.vendor() + ")", j.home()));
-            }
-            return 0;
-        }
-        throw new JpmException("`jpm java " + sub + "` is not available yet. Installing and switching JDKs and GraalVM,"
-                + " and `jvm exec`, are roadmap step 2.");
+    int java(List<String> args, boolean asJvm) {
+        return new JavaCommands(cwd, asJvm).run(args);
     }
 
     // ---------------------------------------------------------------- extensions
@@ -666,7 +688,7 @@ final class Commands {
                 main = Jars.mainClass(b.paths(pkg.id, null).get(0));
             }
             if (main == null) throw new JpmException(d.key + " has no main class, so it cannot run as an extension");
-            Jdk jdk = Jdk.select(null, null, false);
+            Jdk jdk = Toolchain.require(JavaSpec.any());
             Fs.mkdirs(globalBin());
             boolean win = System.getProperty("os.name").toLowerCase().contains("win");
             Path launcher = globalBin().resolve("jpm-" + name + (win ? ".cmd" : ""));

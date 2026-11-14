@@ -40,7 +40,13 @@ public final class Main {
               patch --commit <dep>        Save your edits to patches/ and record them in the manifest
 
             Toolchain
-              java list                   List the JDKs jpm can see
+              java list [--available]     List installed JDKs, or what can be installed
+              java install <java>         Install a JDK or GraalVM (21, temurin-17, graalvm-21, ...)
+              java remove <java>          Remove a JDK jpm installed
+              java use <java>             Set "java" in the manifest (and install it)
+              jvm exec <java> -- <cmd>    Run a command with a JDK, changing nothing persistent
+              build --native              Also build a native executable with GraalVM
+              start --trace               Run under the native-image tracing agent to record its config
 
             Any other command runs an extension: `jpm format` runs `jpm-format`.
             Global options: -v/--verbose, --offline
@@ -64,7 +70,34 @@ public final class Main {
         System.exit(code);
     }
 
+    /** True when started as {@code jvm} (a link or copy of the binary, or the jvm launcher script). */
+    static boolean invokedAsJvm() {
+        if ("jvm".equals(System.getenv("JPM_AS"))) return true;
+        try {
+            String cmd = ProcessHandle.current().info().command().orElse("");
+            String name = java.nio.file.Path.of(cmd).getFileName().toString().toLowerCase();
+            return name.equals("jvm") || name.equals("jvm.exe");
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     static int run(List<String> args) {
+        if (invokedAsJvm()) {
+            if (args.isEmpty() || args.get(0).equals("-h") || args.get(0).equals("--help")) {
+                System.out.print(JavaCommands.JVM_HELP);
+                return 0;
+            }
+            if (args.get(0).equals("--version")) {
+                System.out.println("jvm (jpm " + VERSION + ")");
+                return 0;
+            }
+            args.removeIf(a -> {
+                if (a.equals("-v") || a.equals("--verbose")) { Log.verbose = true; return true; }
+                return false;
+            });
+            return new Commands().java(args, true);
+        }
         // global flags, before the command
         while (!args.isEmpty() && args.get(0).startsWith("-")) {
             String a = args.get(0);
@@ -101,7 +134,8 @@ public final class Main {
             case "run" -> c.runScript(args);
             case "clean" -> c.clean(args);
             case "patch" -> c.patch(args);
-            case "java" -> c.java(args);
+            case "java" -> c.java(args, false);
+            case "jvm" -> c.java(args, true);
             default -> c.extension(cmd, args);
         };
     }

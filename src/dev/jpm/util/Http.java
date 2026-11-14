@@ -1,0 +1,106 @@
+package dev.jpm.util;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.ProxySelector;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.time.Duration;
+import java.util.HexFormat;
+
+/** HTTP downloads through the system proxy settings. */
+public final class Http {
+    private Http() {}
+
+    private static HttpClient client;
+
+    public static synchronized HttpClient client() {
+        if (client == null) {
+            client = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .proxy(ProxySelector.getDefault())
+                    .connectTimeout(Duration.ofSeconds(20))
+                    .build();
+        }
+        return client;
+    }
+
+    private static HttpRequest get(String url, Duration timeout) {
+        return HttpRequest.newBuilder(URI.create(url)).timeout(timeout).header("User-Agent", "jpm").GET().build();
+    }
+
+    public static String getString(String url) {
+        if (Fs.offline()) throw new JpmException("Offline: cannot fetch " + url);
+        Log.debug("GET " + url);
+        try {
+            HttpResponse<String> r = client().send(get(url, Duration.ofSeconds(60)), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (r.statusCode() != 200) throw new JpmException("GET " + url + " failed with HTTP " + r.statusCode());
+            return r.body();
+        } catch (IOException e) {
+            throw new JpmException("Could not fetch " + url + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JpmException("Interrupted");
+        }
+    }
+
+    /**
+     * Downloads to {@code target} (atomically), printing progress for large files, and returns the
+     * SHA-256 of what was downloaded.
+     */
+    public static String download(String url, Path target, String label) {
+        if (Fs.offline()) throw new JpmException("Offline: cannot download " + url);
+        Log.debug("GET " + url);
+        try {
+            HttpResponse<InputStream> r = client().send(get(url, Duration.ofMinutes(30)), HttpResponse.BodyHandlers.ofInputStream());
+            if (r.statusCode() != 200) {
+                r.body().close();
+                throw new JpmException("Download of " + url + " failed with HTTP " + r.statusCode());
+            }
+            long total = r.headers().firstValueAsLong("Content-Length").orElse(-1);
+            Files.createDirectories(target.getParent());
+            Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            boolean tty = System.console() != null;
+            try (InputStream in = r.body(); OutputStream out = Files.newOutputStream(tmp)) {
+                byte[] buf = new byte[1 << 16];
+                long done = 0;
+                int lastPct = -1;
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                    md.update(buf, 0, n);
+                    done += n;
+                    if (tty && total > 0) {
+                        int pct = (int) (done * 100 / total);
+                        if (pct != lastPct) {
+                            System.err.print("\r" + String.format("%12s", "Downloading") + " " + label + " " + pct + "% of " + (total >> 20) + " MB");
+                            lastPct = pct;
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                Files.deleteIfExists(tmp);
+                throw e;
+            }
+            if (tty && total > 0) System.err.print("\r\u001b[K");
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            return HexFormat.of().formatHex(md.digest());
+        } catch (IOException e) {
+            throw new JpmException("Could not download " + url + ": " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JpmException("Interrupted");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+}

@@ -9,6 +9,9 @@ import dev.jpm.resolve.Graph;
 import dev.jpm.resolve.Install;
 import dev.jpm.resolve.Lockfile;
 import dev.jpm.resolve.Resolver;
+import dev.jpm.toolchain.JavaSpec;
+import dev.jpm.toolchain.Jdk;
+import dev.jpm.toolchain.Toolchain;
 import dev.jpm.util.Fs;
 import dev.jpm.util.Hash;
 import dev.jpm.util.JpmException;
@@ -54,8 +57,65 @@ public final class Builder {
         return env;
     }
 
+    /** The JDK a manifest asks for, installed first if it is missing. */
     public Jdk jdk(Manifest m) {
-        return Jdk.select(m.java, m.javaMajor(), false);
+        try {
+            return Toolchain.require(JavaSpec.parse(m.java));
+        } catch (JpmException e) {
+            throw new JpmException(m.file + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * The GraalVM for native builds of a module: the manifest's JDK if it is GraalVM, otherwise any
+     * installed GraalVM of the same major version, otherwise GraalVM Community, installed.
+     */
+    public Jdk graalvm(Manifest m) {
+        JavaSpec spec = JavaSpec.parse(m.java);
+        if (spec.version() == null) spec = new JavaSpec(spec.distribution(), Integer.toString(jdk(m).major()));
+        Jdk g = null;
+        if (spec.graal()) {
+            g = Toolchain.find(spec);
+        } else {
+            int major = spec.major();
+            for (Jdk j : Jdk.discover()) if (j.major() == major && j.hasNativeImage()) { g = j; break; }
+        }
+        if (g == null) g = Toolchain.require(spec.asGraal());
+        if (!g.hasNativeImage()) {
+            throw new JpmException(g.id() + " (" + g.home() + ") has no native-image. Install a GraalVM with"
+                    + " `jpm java install graalvm-" + g.major() + "`.");
+        }
+        return g;
+    }
+
+    /** Builds a native executable of a module's main into {@code dist/}. */
+    public Path nativeImage(Project.Module m, String entry) {
+        Map<String, String> mains = m.manifest.mains;
+        if (mains.isEmpty()) throw new JpmException(m.manifest.file + " has no \"main\", so there is nothing to build natively");
+        String main = entry != null ? mains.getOrDefault(entry, entry)
+                : mains.getOrDefault("main", mains.values().iterator().next());
+        Path jar = jar(m);
+        Jdk graal = graalvm(m.manifest);
+        List<Path> cp = new ArrayList<>();
+        cp.add(jar);
+        cp.addAll(classpath(m, Cp.RUNTIME));
+        String exe = m.name() + (entry != null && mains.size() > 1 ? "-" + entry : "");
+        Path out = m.dir.resolve("dist").resolve(exe);
+        List<String> cmd = new ArrayList<>();
+        cmd.add(graal.bin("native-image").toString());
+        cmd.add("--no-fallback");
+        cmd.addAll(m.manifest.nativeArgs);
+        cmd.add("-cp");
+        cmd.add(Compiler.join(Compiler.distinct(cp)));
+        cmd.add("-o");
+        cmd.add(out.toString());
+        cmd.add(main);
+        Log.step("Native", m.name() + " with " + graal.id() + Log.dim(" (this takes a while)"));
+        int code = dev.jpm.util.Exec.inherit(m.dir, cmd, Map.of());
+        if (code != 0) throw new JpmException("native-image failed for " + m.name() + " (exit " + code + ")", code);
+        Path built = Jdk.windowsExe(out);
+        Log.step("Built", m.dir.relativize(built).toString());
+        return built;
     }
 
     // ---------------------------------------------------------------- classpaths
@@ -317,7 +377,7 @@ public final class Builder {
             List<Path> cp = new ArrayList<>();
             cp.add(jar);
             for (String id : graph.closure(self, false)) if (!id.equals(p.id)) cp.addAll(paths(id, consumer));
-            Jdk jdk = consumer != null ? jdk(consumer.manifest) : Jdk.select(null, null, false);
+            Jdk jdk = consumer != null ? jdk(consumer.manifest) : Toolchain.require(JavaSpec.any());
             int release = Math.max(8, Math.min(jdk.major(), classRelease(jar)));
             Path srcRoot = out.getParent().resolve("changed");
             Fs.deleteTree(srcRoot);

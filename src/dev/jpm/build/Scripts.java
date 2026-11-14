@@ -2,6 +2,7 @@ package dev.jpm.build;
 
 import dev.jpm.Manifest;
 import dev.jpm.Project;
+import dev.jpm.toolchain.Jdk;
 import dev.jpm.util.Exec;
 import dev.jpm.util.JpmException;
 import dev.jpm.util.Log;

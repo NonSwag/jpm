@@ -26,6 +26,7 @@ public final class Exec {
         Log.debug("$ " + String.join(" ", cmd) + (dir != null ? "  (in " + dir + ")" : ""));
         ProcessBuilder pb = new ProcessBuilder(cmd);
         if (dir != null) pb.directory(dir.toFile());
+        pb.environment().remove("JPM_AS");
         pb.environment().putAll(env);
         try {
             Process p = pb.start();
@@ -50,6 +51,7 @@ public final class Exec {
         Log.debug("$ " + String.join(" ", cmd));
         ProcessBuilder pb = new ProcessBuilder(cmd).inheritIO();
         if (dir != null) pb.directory(dir.toFile());
+        pb.environment().remove("JPM_AS");
         pb.environment().putAll(env);
         try {
             Process p = pb.start();
@@ -68,6 +70,7 @@ public final class Exec {
         Log.debug("$ " + String.join(" ", cmd));
         ProcessBuilder pb = new ProcessBuilder(cmd).inheritIO();
         if (dir != null) pb.directory(dir.toFile());
+        pb.environment().remove("JPM_AS");
         pb.environment().putAll(env);
         try {
             return pb.start();

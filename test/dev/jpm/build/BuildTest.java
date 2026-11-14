@@ -1,6 +1,9 @@
 package dev.jpm.build;
 
 import dev.jpm.Manifest;
+import dev.jpm.toolchain.JavaSpec;
+import dev.jpm.toolchain.Jdk;
+import dev.jpm.toolchain.Toolchain;
 import dev.jpm.util.Fs;
 import dev.jpm.util.JpmException;
 import org.junit.jupiter.api.Test;
@@ -82,7 +85,7 @@ class BuildTest {
 
     @Test
     void classInfoSeparatesAbiFromBody(@TempDir Path dir) throws Exception {
-        Jdk jdk = Jdk.select(null, null, false);
+        Jdk jdk = Toolchain.require(JavaSpec.any());
         Path src = dir.resolve("src/p");
         Fs.write(src.resolve("A.java"), "package p; public class A { public int f() { return 1; } private int g() { return 0; } }");
         ClassInfo one = compileOne(jdk, dir);
@@ -108,7 +111,7 @@ class BuildTest {
 
     @Test
     void incrementalCompile(@TempDir Path dir) {
-        Jdk jdk = Jdk.select(null, null, false);
+        Jdk jdk = Toolchain.require(JavaSpec.any());
         Path src = dir.resolve("src");
         Fs.write(src.resolve("p/A.java"), "package p; public class A { public static int f() { return 1; } }");
         Fs.write(src.resolve("p/B.java"), "package p; public class B { int g() { return A.f(); } }");

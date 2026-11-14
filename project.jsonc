@@ -1,4 +1,4 @@
-// jpm builds itself: `./bootstrap.sh` once, then `bin/jpm build` and `bin/jpm test`.
+// jpm builds itself: `./bootstrap.sh` once, then `bin/jpm build`, `bin/jpm test` and `bin/jpm build --native`.
 {
   "name": "jpm",
   "version": "0.1.0",
@@ -8,7 +8,13 @@
   "test": {
     "org.junit.jupiter:junit-jupiter": "5.11.4"
   },
-  "scripts": {
-    "native": "scripts/native.sh"
-  }
+  "nativeArgs": [
+    "-O2",
+    "-H:+ReportExceptionStackTraces",
+    "--enable-url-protocols=https,http",
+    // The JDK's XML parser (used for POMs) loads its messages from resource bundles at run time.
+    "-H:IncludeResourceBundles=com.sun.org.apache.xerces.internal.impl.msg.XMLMessages",
+    "-H:IncludeResourceBundles=com.sun.org.apache.xerces.internal.impl.msg.DOMMessages",
+    "-H:IncludeResourceBundles=com.sun.org.apache.xerces.internal.impl.xpath.regex.message"
+  ]
 }
