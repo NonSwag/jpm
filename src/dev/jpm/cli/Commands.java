@@ -887,6 +887,10 @@ final class Commands {
                     + " with `jpm add -g <dependency>` (it runs as jpm-" + cmd + ").");
         }
         Map<String, String> env = new LinkedHashMap<>();
+        // so the extension can call back into this jpm (jpm build, jpm info --json)
+        Path self = Shims.self();
+        env.put("JPM_EXE", self != null ? self.toString() : "jpm");
+        env.put("JPM_VERSION_OF_JPM", Main.VERSION);
         try {
             Project p = Project.find(cwd);
             Project.Module m = p.moduleAt(cwd) != null ? p.moduleAt(cwd) : p.rootModule();
