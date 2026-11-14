@@ -183,10 +183,16 @@ final class ShellSetup {
         return -1;
     }
 
+    /** True if a startup file already sources jpm's env file (wherever JPM_HOME puts it). */
+    static boolean sourcesEnv(String rc) {
+        String abs = envFile().toAbsolutePath().normalize().toString();
+        return rc.contains(abs) || rc.contains(sourceLine());
+    }
+
     /** The rc text with the marked source line: added once, or replacing the old PATH line. */
     static String withSourceLine(String rc) {
         String line = sourceLine();
-        if (rc.contains(".jpm/env")) return rc;
+        if (sourcesEnv(rc)) return rc;
         String[] lines = rc.split("\n", -1);
         int old = oldLineIndex(lines);
         if (old >= 0) {
@@ -206,7 +212,7 @@ final class ShellSetup {
         for (Path f : rcFiles()) {
             if (!Files.isRegularFile(f)) return false;
             String s = Fs.read(f);
-            if (f.equals(fishFile()) ? !s.contains("fish_add_path") : !s.contains(".jpm/env")) return false;
+            if (f.equals(fishFile()) ? !s.contains("fish_add_path") : !sourcesEnv(s)) return false;
         }
         return true;
     }

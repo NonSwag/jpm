@@ -12,7 +12,8 @@ class ShellSetupTest {
         String old = "alias ll='ls -l'\n\n# Added by the jpm installer\nexport PATH=\"$HOME/.jpm/bin:$PATH\"\nexport EDITOR=vim\n";
         assertTrue(ShellSetup.hasOldLine(old));
         String next = ShellSetup.withSourceLine(old);
-        assertTrue(next.contains(".jpm/env"), next);
+        assertTrue(next.contains(ShellSetup.sourceLine()), next);
+        assertTrue(ShellSetup.sourcesEnv(next));
         assertFalse(next.contains("export PATH=\"$HOME/.jpm/bin"), next);
         assertTrue(next.contains("export EDITOR=vim"));
         assertEquals(next, ShellSetup.withSourceLine(next), "added only once");
