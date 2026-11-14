@@ -39,8 +39,12 @@ try {
     $version = & (Join-Path $dir 'jpm.exe') --version
     Write-Host "Installed $version to $dir (with jvm.exe)"
     if (-not $env:JPM_NO_SHIMS) {
+        # jpm writes status lines to stderr; Windows PowerShell would turn those into errors under 'Stop'
+        $ErrorActionPreference = 'Continue'
         & (Join-Path $dir 'jpm.exe') jvm setup *> $null
-        if ($LASTEXITCODE -eq 0) { Write-Host "Added java, javac, ... shims that follow your project's JDK (see 'jvm current')" }
+        $shimExit = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($shimExit -eq 0) { Write-Host "Added java, javac, ... shims that follow your project's JDK (see 'jvm current')" }
         else { Write-Warning "could not create the java shims; run 'jvm setup' to see why" }
     }
     $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')

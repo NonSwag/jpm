@@ -185,16 +185,23 @@ jobs:
           New-Item -ItemType Directory -Force $proj | Out-Null
           Set-Content (Join-Path $proj 'project.jsonc') '{ "name": "p", "version": "1.0.0", "java": "17" }'
           Push-Location $proj
+          $ErrorActionPreference = 'Continue'
           $v = & (Join-Path $env:JPM_HOME 'bin\java.exe') -version 2>&1 | Out-String
+          $ErrorActionPreference = 'Stop'
           Pop-Location
           Write-Host $v
           if ($v -notmatch 'version "17') { throw "the java shim did not use the project's JDK" }
           # jpm upgrade replaces the running jpm.exe and re-links the shims
           Set-Content (Join-Path $env:RUNNER_TEMP 'release\VERSION') '99.0.0'
-          & (Join-Path $env:JPM_HOME 'bin\jpm.exe') upgrade
-          if ($LASTEXITCODE -ne 0) { throw "jpm upgrade failed" }
+          $ErrorActionPreference = 'Continue'
+          & (Join-Path $env:JPM_HOME 'bin\jpm.exe') upgrade 2>&1 | Out-Host
+          $upgradeExit = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          if ($upgradeExit -ne 0) { throw "jpm upgrade failed" }
           Push-Location $proj
+          $ErrorActionPreference = 'Continue'
           $v = & (Join-Path $env:JPM_HOME 'bin\java.exe') -version 2>&1 | Out-String
+          $ErrorActionPreference = 'Stop'
           Pop-Location
           if ($v -notmatch 'version "17') { throw "the java shim broke after jpm upgrade" }
 
