@@ -28,6 +28,7 @@ public final class Main {
               update [dep...]             Re-resolve within ranges (--latest goes past them)
               outdated                    Show dependencies with newer versions
               why <dep>                   Show why a dependency is in the graph
+              info [--json]               Describe the project (modules, dependencies); --json for extensions
               import [dir]                Create project.jsonc from a Maven or Gradle build (--dry-run, --force)
 
             Build and run
@@ -176,6 +177,7 @@ public final class Main {
             case "clean" -> c.clean(args);
             case "patch" -> c.patch(args);
             case "import" -> c.importBuild(args);
+            case "info" -> c.info(args);
             case "java" -> c.java(args, false);
             case "jvm" -> c.java(args, true);
             default -> c.extension(cmd, args);

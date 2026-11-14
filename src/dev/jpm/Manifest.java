@@ -69,6 +69,11 @@ public final class Manifest {
     public final Layout layout;
     /** What `jpm build` produces: "jar" (default) or "bundle" (jar-in-jar with isolated modules). */
     public final String packaging;
+    public final String description;
+    public final String license;
+    public final String url;
+    /** Settings for extensions, by extension name (e.g. "publish"); jpm passes them through untouched. */
+    public final Map<String, Object> extensions;
 
     private Manifest(Path file, String source) {
         this.file = file;
@@ -82,7 +87,7 @@ public final class Manifest {
 
         Set<String> known = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
                 "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-                "javacArgs", "nativeArgs", "layout", "package", "description", "license", "$schema");
+                "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
         for (Jsonc.Member m : root.members.values()) {
             if (!known.contains(m.key)) {
                 throw new JpmException(file + ":" + line(m.keyStart) + ": unknown field \"" + m.key + "\"");
@@ -171,6 +176,14 @@ public final class Manifest {
         this.javacArgs = stringList("javacArgs");
         this.nativeArgs = stringList("nativeArgs");
         this.packaging = str("package", false) == null ? "jar" : str("package", false);
+        this.description = str("description", false);
+        this.license = str("license", false);
+        this.url = str("url", false);
+        Jsonc.Node ext = root.get("extensions");
+        if (ext != null && !ext.isObject()) throw err(ext, "extensions must be an object of extension name to its settings");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> extMap = ext == null ? Map.of() : (Map<String, Object>) ext.value;
+        this.extensions = extMap;
         if (!packaging.equals("jar") && !packaging.equals("bundle")) throw err(root.get("package"), "package must be \"jar\" or \"bundle\"");
         this.layout = Layout.named(str("layout", false));
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");

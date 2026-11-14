@@ -702,6 +702,115 @@ final class Commands {
         return 0;
     }
 
+    // ---------------------------------------------------------------- info
+
+    /**
+     * {@code jpm info --json}: the project as extensions see it. The output is a stable contract: fields are
+     * only ever added. With {@code --classpath}, each module also lists its compile classpath (which may
+     * build Git dependencies first).
+     */
+    int info(List<String> args) {
+        boolean json = flag(args, "--json");
+        boolean withClasspath = flag(args, "--classpath");
+        noMoreFlags(args);
+        Ctx c = open(false);
+        Builder b = c.builder(Env.Mode.PRODUCTION);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("infoVersion", 1);
+        out.put("jpmVersion", Main.VERSION);
+        out.put("projectDir", c.project.dir.toString());
+        out.put("name", c.project.root.name);
+        if (c.project.root.version != null) out.put("version", c.project.root.version);
+        out.put("workspace", c.project.root.isWorkspaceRoot());
+        out.put("repositories", c.project.root.repositories);
+        out.put("extensions", c.project.root.extensions);
+        List<Object> modules = new ArrayList<>();
+        for (Project.Module m : c.project.buildOrder()) {
+            Map<String, Object> mod = new LinkedHashMap<>();
+            Manifest mf = m.manifest;
+            mod.put("name", m.name());
+            if (mf.group != null) mod.put("group", mf.group);
+            mod.put("version", m.version());
+            mod.put("dir", m.dir.toString());
+            mod.put("relativeDir", m.relDir());
+            mod.put("visibility", mf.visibility);
+            mod.put("package", mf.packaging);
+            if (mf.description != null) mod.put("description", mf.description);
+            if (mf.license != null) mod.put("license", mf.license);
+            if (mf.url != null) mod.put("url", mf.url);
+            mod.put("main", new LinkedHashMap<>(mf.mains));
+            mod.put("layout", mf.layout.name());
+            mod.put("sourceDir", m.srcDir().toString());
+            mod.put("resourceDir", m.assetsDir().toString());
+            mod.put("jar", b.jarPath(m).toString());
+            mod.put("java", mf.java);
+            try {
+                Jdk jdk = b.jdk(mf);
+                mod.put("javaHome", jdk.home().toString());
+                Integer t = mf.targetMajor();
+                mod.put("release", t == null ? jdk.major() : t);
+            } catch (JpmException e) {
+                mod.put("javaError", e.getMessage());
+            }
+            List<Object> deps = new ArrayList<>();
+            for (Manifest.Dependency d : mf.dependencies) {
+                Map<String, Object> dep = new LinkedHashMap<>();
+                DepKey k = d.key();
+                dep.put("key", k.toString());
+                dep.put("kind", k.kind().name().toLowerCase());
+                dep.put("scope", d.scope().key);
+                dep.put("spec", d.spec());
+                if (d.runtimeOnly()) dep.put("runtimeOnly", true);
+                if (!d.exclusions().isEmpty()) dep.put("exclude", new ArrayList<>(d.exclusions()));
+                switch (k.kind()) {
+                    case MAVEN -> {
+                        dep.put("group", k.group());
+                        dep.put("artifact", k.artifact());
+                        if (k.classifier() != null) dep.put("classifier", k.classifier());
+                    }
+                    case GIT -> dep.put("repository", k.repoKey().toString());
+                    case WORKSPACE -> {
+                        Project.Module sib = c.project.module(k.artifact());
+                        dep.put("module", k.artifact());
+                        if (sib != null) {
+                            if (sib.manifest.group != null) dep.put("group", sib.manifest.group);
+                            dep.put("artifact", sib.name());
+                            dep.put("version", sib.version());
+                        }
+                    }
+                }
+                Graph.Pkg p = c.graph.get(k.toString());
+                if (p != null && p.kind != Graph.Kind.LOCAL) {
+                    dep.put("resolved", p.version);
+                    if (p.commit != null) dep.put("commit", p.commit);
+                }
+                deps.add(dep);
+            }
+            mod.put("dependencies", deps);
+            mod.put("extensions", mf.extensions);
+            if (withClasspath) {
+                mod.put("compileClasspath", b.classpath(m, Builder.Cp.COMPILE).stream().map(Path::toString).toList());
+            }
+            modules.add(mod);
+        }
+        out.put("modules", modules);
+        if (json) {
+            System.out.println(Jsonc.write(out));
+        } else {
+            for (Object o : modules) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> mod = (Map<String, Object>) o;
+                System.out.println(Log.bold(mod.get("name") + " " + mod.get("version")) + "  " + mod.get("dir"));
+                for (Object d : (List<?>) mod.get("dependencies")) {
+                    Map<?, ?> dm = (Map<?, ?>) d;
+                    System.out.println("  " + dm.get("scope") + "  " + dm.get("key") + " " + dm.get("spec")
+                            + (dm.get("resolved") != null ? Log.dim(" -> " + dm.get("resolved")) : ""));
+                }
+            }
+        }
+        return 0;
+    }
+
     // ---------------------------------------------------------------- import
 
     int importBuild(List<String> args) {

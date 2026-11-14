@@ -71,6 +71,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `install [--frozen]` | Resolve and write `project.lock`; `--frozen` fails if the lock is stale (CI) |
 | `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them |
 | `outdated`, `why <dep>` | Inspect the graph |
+| `info [--json]` | Describe the project: modules, versions, folders, dependencies; `--json` is a stable format for extensions |
 | `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |
 | `build`, `start`, `test`, `clean` | Build into `dist/`, run main with production env, run tests, delete output |
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
@@ -146,6 +147,9 @@ Other fields:
 - `group`; `visibility` (`public`/`internal`, workspaces); `workspace` (module list, on a workspace root)
 - `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
 - `javacArgs`, `nativeArgs` (extra flags for javac and native-image)
+- `description`, `license`, `url` (used by publishing)
+- `extensions`: settings for extensions, by name, e.g. `"extensions": { "publish": { ... } }`; jpm passes
+  them through untouched (`jpm info --json`)
 
 Unknown fields are errors, and every error names the file and line.
 
