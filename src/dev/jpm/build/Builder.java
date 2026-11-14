@@ -336,13 +336,13 @@ public final class Builder {
     // ---------------------------------------------------------------- Maven jars and patches
 
     private Path mavenJar(Graph.Pkg p, Project.Module consumer) {
-        Path jar = p.artifact != null ? p.artifact : repo.require(p.group(), p.name(), p.version, null, "jar");
+        Path jar = p.artifact != null ? p.artifact : repo.require(p.group(), p.name(), p.version, p.classifier(), "jar");
         Manifest owner = patchOwner(p.id);
         if (owner == null) return jar;
         Path patch = owner.dir().resolve(owner.patches.get(p.id));
         if (!Files.exists(patch)) throw new JpmException(owner.file + ": patch file " + owner.patches.get(p.id) + " for " + p.id + " does not exist");
         String key = new Hash().add(Hash.sha256(jar)).add(Hash.sha256(Fs.read(patch))).hex().substring(0, 24);
-        Path out = Fs.home().resolve("patched").resolve(key).resolve(p.name() + "-" + p.version + "-patched.jar");
+        Path out = Fs.home().resolve("patched").resolve(key).resolve(p.name() + "-" + p.version + (p.classifier() != null ? "-" + p.classifier() : "") + "-patched.jar");
         if (Files.exists(out)) return out;
         Log.step("Patching", p.id + " " + p.version);
         Path sources = repo.fetch(p.group(), p.name(), p.version, "sources", "jar");
@@ -520,7 +520,7 @@ public final class Builder {
      */
     private List<Path> buildToolClasspath(Graph.Pkg p, GitModule mod, List<Manifest.Dependency> devDeps) {
         List<Resolver.Root> roots = new ArrayList<>();
-        for (Manifest.Dependency d : devDeps) roots.add(new Resolver.Root(p.id, d.key(), d.spec()));
+        for (Manifest.Dependency d : devDeps) roots.add(new Resolver.Root(p.id, d.key(), d.spec(), d.exclusions()));
         Graph prev = null;
         String lockText = dev.jpm.git.GitRepo.of(DepKey.parse(p.id)).show(p.commit, Manifest.LOCK);
         if (lockText != null) {

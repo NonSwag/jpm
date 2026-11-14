@@ -203,10 +203,14 @@ final class Commands {
             keyPart = s.substring(0, at);
             spec = s.substring(at + 1);
         } else if (!s.startsWith("github:") && !s.startsWith("gitlab:") && !s.startsWith("codeberg:")
-                && !s.startsWith("workspace:") && s.chars().filter(c -> c == ':').count() == 2) {
-            int last = s.lastIndexOf(':');
-            keyPart = s.substring(0, last);
-            spec = s.substring(last + 1);
+                && !s.startsWith("workspace:")) {
+            // g:a:version, g:a:classifier, or g:a:classifier:version
+            String[] parts = s.split(":");
+            if ((parts.length == 3 && !parts[2].isEmpty() && Character.isDigit(parts[2].charAt(0))) || parts.length == 4) {
+                int last = s.lastIndexOf(':');
+                keyPart = s.substring(0, last);
+                spec = s.substring(last + 1);
+            }
         }
         return new DepArg(DepKey.parse(keyPart), spec == null || spec.isBlank() ? null : spec);
     }

@@ -97,6 +97,19 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 }
 ```
 
+A dependency is a version string, or an object with options:
+
+```jsonc
+"runtime": {
+  "org.lwjgl:lwjgl:natives-linux": "3.3.4",                              // classifier: third part of the key
+  "org.slf4j:slf4j-simple": { "version": "2.0.16", "runtimeOnly": true }, // on the runtime classpath only
+  "com.example:lib": { "version": "1.2", "exclude": ["commons-logging:commons-logging", "org.unwanted:*"] }
+}
+```
+
+Exclusions apply to everything the dependency brings in, as in Maven. `jpm add g:a:classifier@1.0` adds a
+classified jar.
+
 Other fields: `layout` (`"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`,
 `src/test/resources`; set by `jpm import`), `group`, `visibility` (`public`/`internal`, workspaces), `workspace` (module list, on a
 workspace root), `repositories` (extra Maven repositories), `defineClass` (name of the generated class),
@@ -184,8 +197,8 @@ workspace, and module-to-module dependencies become `workspace:` dependencies.
   `gradle/libs.versions.toml` as text instead, executing nothing; this is also the fallback when Gradle
   is not installed. Versions managed by platforms (BOMs) are read from the BOM's POM.
 
-Anything without a jpm equivalent is listed as a warning: exclusions, classifiers, plugins that generate
-code, Kotlin sources, custom source directories, `runtimeOnly` (jpm has no runtime-only scope).
+Exclusions, classifiers and runtime-only dependencies carry over. Anything without a jpm equivalent is
+listed as a warning: plugins that generate code, Kotlin sources, custom source directories.
 
 **Git dependencies without a `project.jsonc`** are imported the same way when they have a `pom.xml` or
 a Gradle build, then built from source like any Git dependency. jpm never runs a dependency's build
@@ -224,8 +237,7 @@ redirect a Git host, e.g. to a mirror or `file:///…` for tests.
 
 ## Not yet done
 
-- Maven and Gradle features with no manifest equivalent yet: dependency exclusions, classifiers,
-  runtime-only dependencies, code-generating plugins, Kotlin.
+- Maven and Gradle features with no manifest equivalent: code-generating plugins, Kotlin.
 - Jar-in-jar isolation with generated launcher and class loaders. Packaging is an open question in
   the spec; `build` produces plain jars for now.
 - Running the tracing agent automatically during tests (an open question); for now `start --trace`
@@ -233,5 +245,4 @@ redirect a Git host, e.g. to a mirror or `file:///…` for tests.
 - Hot reload is restart-based; in-process reload (JetBrains Runtime or similar) is an open question.
 - Changesets: `.changeset/` is reserved only. The IntelliJ plugin is a separate project.
 - The resolver is jpm's own rather than an embedded Coursier or Maven Resolver, to keep jpm free of
-  dependencies for native-image. It does not evaluate POM profiles or Gradle module metadata, and skips
-  dependencies with classifiers.
+  dependencies for native-image. It does not evaluate POM profiles or Gradle module metadata.

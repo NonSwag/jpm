@@ -64,7 +64,11 @@ gradle.projectsEvaluated {
                     def attr = d.attributes.getAttribute(Category.CATEGORY_ATTRIBUTE)
                     category = attr?.name
                 } catch (ignored) {}
-                [group: d.group, name: d.name, version: d.version, category: category]
+                def classifier = null
+                try { classifier = d.artifacts.find { it.classifier }?.classifier } catch (ignored) {}
+                def excludes = []
+                try { excludes = d.excludeRules.collect { [group: it.group, module: it.module] } } catch (ignored) {}
+                [group: d.group, name: d.name, version: d.version, category: category, classifier: classifier, excludes: excludes]
             }
         }
         ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath', 'annotationProcessor'].each { c ->

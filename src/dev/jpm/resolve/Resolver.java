@@ -55,7 +55,11 @@ public final class Resolver {
     private record Expanded(List<EdgeReq> edges, boolean hasJar, Boolean isPublic) {}
 
     /** A top-level requirement: a dependency declared by {@code from}. */
-    public record Root(String from, DepKey key, String spec) {}
+    public record Root(String from, DepKey key, String spec, Set<String> exclusions) {
+        public Root(String from, DepKey key, String spec) {
+            this(from, key, spec, Set.of());
+        }
+    }
 
     private final Project project;
     private final List<Root> roots;
@@ -75,7 +79,7 @@ public final class Resolver {
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 if (d.key().isWorkspace()) continue;
                 validateSpec(d);
-                roots.add(new Root(m.id(), d.key(), d.spec()));
+                roots.add(new Root(m.id(), d.key(), d.spec(), d.exclusions()));
             }
         }
         this.repo = repo;
@@ -118,7 +122,9 @@ public final class Resolver {
         for (String r : project.root.repositories) h.add("repo " + r);
         for (Project.Module m : project.modules) {
             h.add("module " + m.name());
-            for (Manifest.Dependency d : effectiveDeps(m)) h.add(d.scope().key + " " + d.key() + " " + d.spec());
+            for (Manifest.Dependency d : effectiveDeps(m)) {
+                h.add(d.scope().key + " " + d.key() + " " + d.spec() + " " + d.exclusions() + (d.runtimeOnly() ? " rt" : ""));
+            }
         }
         return h.hex().substring(0, 32);
     }
@@ -128,7 +134,7 @@ public final class Resolver {
         List<Graph.Edge> out = new ArrayList<>();
         for (Manifest.Dependency d : effectiveDeps(m)) {
             if (d.scope() != scope) continue;
-            out.add(new Graph.Edge(idOf(d.key()), false, Set.of()));
+            out.add(new Graph.Edge(idOf(d.key()), d.runtimeOnly(), d.exclusions()));
         }
         return out;
     }
@@ -154,7 +160,7 @@ public final class Resolver {
                 String id = idOf(r.key());
                 kinds.put(id, r.key().isGit() ? Graph.Kind.GIT : Graph.Kind.MAVEN);
                 requests.computeIfAbsent(id, k -> new ArrayList<>()).add(new Request(r.spec(), true, true, r.from()));
-                queue.add(new Object[]{id, new LinkedHashSet<String>()});
+                queue.add(new Object[]{id, new LinkedHashSet<>(r.exclusions())});
             }
             while (!queue.isEmpty()) {
                 Object[] item = queue.poll();
@@ -241,7 +247,7 @@ public final class Resolver {
             p.dir = m.dir;
             for (Manifest.Dependency d : m.manifest.deps(Manifest.Scope.RUNTIME)) {
                 String id = idOf(d.key());
-                p.deps.put(id, new Graph.Edge(id, false, Set.of()));
+                p.deps.put(id, new Graph.Edge(id, d.runtimeOnly(), d.exclusions()));
             }
             g.put(p);
         }
@@ -298,8 +304,8 @@ public final class Resolver {
             Version v = Version.of(first);
             if (satisfies(v, hard)) return new Selected(first, null, null);
         } else {
-            int c = id.indexOf(':');
-            List<Version> all = repo.versions(id.substring(0, c), id.substring(c + 1));
+            String[] ga = id.split(":");
+            List<Version> all = repo.versions(ga[0], ga[1]);
             Optional<Version> best = new AllOf(hard).best(all);
             if (best.isPresent()) return new Selected(best.get().toString(), null, null);
         }
@@ -485,8 +491,9 @@ public final class Resolver {
     }
 
     private Expanded expandMaven(String id, String version) {
-        int c = id.indexOf(':');
-        Pom pom = poms.load(id.substring(0, c), id.substring(c + 1), version);
+        // a classified jar (g:a:classifier) shares the POM of g:a
+        String[] ga = id.split(":");
+        Pom pom = poms.load(ga[0], ga[1], version);
         List<EdgeReq> edges = new ArrayList<>();
         if (pom.relocation != null) {
             String[] r = pom.relocation.split(":");
@@ -499,14 +506,14 @@ public final class Resolver {
             String scope = d.scope() == null ? "compile" : d.scope();
             if (!scope.equals("compile") && !scope.equals("runtime")) continue;
             if (d.optional()) continue;
-            if (d.classifier() != null && !d.classifier().isEmpty()) continue;
             if (d.type() != null && !d.type().equals("jar") && !d.type().equals("bundle")) continue;
             if (d.group() == null || d.artifact() == null || d.group().contains("${") || d.artifact().contains("${")) continue;
             if (d.version() == null || d.version().contains("${")) {
                 Log.warn(id + ":" + version + " depends on " + d.key() + " without a usable version; skipping it");
                 continue;
             }
-            edges.add(new EdgeReq(d.key(), Graph.Kind.MAVEN, d.version(), scope.equals("runtime"), d.exclusions()));
+            String target = d.key() + (d.classifier() != null && !d.classifier().isEmpty() ? ":" + d.classifier() : "");
+            edges.add(new EdgeReq(target, Graph.Kind.MAVEN, d.version(), scope.equals("runtime"), d.exclusions()));
         }
         return new Expanded(edges, !"pom".equals(pom.packaging), null);
     }
@@ -527,7 +534,8 @@ public final class Resolver {
                 String target = idOf(key.withModule(sib));
                 edges.add(new EdgeReq(target, Graph.Kind.GIT, "@" + sel.commit, runtimeOnly, Set.of()));
             } else {
-                edges.add(new EdgeReq(idOf(d.key()), d.key().isGit() ? Graph.Kind.GIT : Graph.Kind.MAVEN, d.spec(), false, Set.of()));
+                edges.add(new EdgeReq(idOf(d.key()), d.key().isGit() ? Graph.Kind.GIT : Graph.Kind.MAVEN, d.spec(),
+                        d.runtimeOnly(), d.exclusions()));
             }
         }
         return new Expanded(edges, true, mod.isPublic());

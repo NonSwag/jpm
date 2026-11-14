@@ -39,6 +39,9 @@ class ImportTest {
                 <artifactId>util</artifactId>
                 <dependencies>
                   <dependency><groupId>org.apache.commons</groupId><artifactId>commons-lang3</artifactId></dependency>
+                  <dependency><groupId>org.lwjgl</groupId><artifactId>lwjgl</artifactId><version>3.3.4</version><classifier>natives-linux</classifier></dependency>
+                  <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-simple</artifactId><version>2.0.16</version><scope>runtime</scope>
+                    <exclusions><exclusion><groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId></exclusion></exclusions></dependency>
                   <dependency><groupId>javax.servlet</groupId><artifactId>servlet-api</artifactId><version>2.5</version><scope>provided</scope></dependency>
                 </dependencies>
                 """);
@@ -61,7 +64,12 @@ class ImportTest {
         Map<String, Object> util = imp.manifests.get("util");
         assertEquals("maven", util.get("layout"));
         assertEquals("17", util.get("target"));
-        assertEquals(Map.of("org.apache.commons:commons-lang3", "3.14.0"), util.get("runtime"));
+        assertEquals(Map.of("org.apache.commons:commons-lang3", "3.14.0",
+                "org.lwjgl:lwjgl:natives-linux", "3.3.4",
+                "org.slf4j:slf4j-simple", Map.of("version", "2.0.16", "exclude", List.of("org.slf4j:slf4j-api"), "runtimeOnly", true)),
+                util.get("runtime"));
+        Manifest um = Manifest.parse(Path.of("util/project.jsonc"), imp.render("util"));
+        assertTrue(um.dependencies.stream().anyMatch(d -> d.runtimeOnly() && d.exclusions().contains("org.slf4j:slf4j-api")));
         assertEquals(Map.of("javax.servlet:servlet-api", "2.5", "org.projectlombok:lombok", "1.18.34"), util.get("dev"));
 
         Map<String, Object> app = imp.manifests.get("app");
@@ -117,7 +125,8 @@ class ImportTest {
         assertEquals(Map.of("org.junit.jupiter:junit-jupiter", "5.11.4"), lib.get("test"));
         Map<String, Object> app = imp.manifests.get("app");
         assertEquals("com.example.Main", app.get("main"));
-        assertEquals(Map.of("workspace:lib", "*", "org.slf4j:slf4j-simple", "2.0.16"), app.get("runtime"));
+        assertEquals(Map.of("workspace:lib", "*",
+                "org.slf4j:slf4j-simple", Map.of("version", "2.0.16", "runtimeOnly", true)), app.get("runtime"));
         assertNull(app.get("dev"));
         assertTrue(imp.warnings.stream().noneMatch(w -> w.contains("root project applies")), imp.warnings.toString());
     }

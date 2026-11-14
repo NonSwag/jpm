@@ -137,22 +137,16 @@ public final class MavenImport {
             imp.warn(where, pom.packaging + " packaging is built as a plain jar");
         }
 
-        Map<String, String> runtime = new TreeMap<>(), dev = new TreeMap<>(), test = new TreeMap<>();
+        Map<String, Object> runtime = new TreeMap<>(), dev = new TreeMap<>(), test = new TreeMap<>();
         for (Pom.Dep d : pom.dependencies) {
             String key = d.group() + ":" + d.artifact();
             String scope = d.scope() == null ? "compile" : d.scope();
-            if (d.classifier() != null && !d.classifier().isEmpty()) {
-                imp.warn(where, "dependency " + key + ":" + d.classifier() + " has a classifier, which project.jsonc cannot express; skipped");
-                continue;
-            }
             if (d.type() != null && !d.type().equals("jar") && !d.type().equals("bundle")) {
                 imp.warn(where, "dependency " + key + " of type " + d.type() + " skipped");
                 continue;
             }
-            if (!d.exclusions().isEmpty()) {
-                imp.warn(where, "exclusions on " + key + " (" + String.join(", ", d.exclusions()) + ") are not carried over");
-            }
-            Map<String, String> target = switch (scope) {
+            boolean classified = d.classifier() != null && !d.classifier().isEmpty();
+            Map<String, Object> target = switch (scope) {
                 case "compile", "runtime" -> runtime;
                 case "provided" -> dev;
                 case "test" -> test;
@@ -162,9 +156,8 @@ public final class MavenImport {
                 imp.warn(where, scope + "-scoped dependency " + key + " skipped");
                 continue;
             }
-            if (scope.equals("runtime")) imp.warn(where, key + " was runtime-only in Maven; jpm puts it on the compile classpath too");
             String sibling = siblings.get(key);
-            if (sibling != null) {
+            if (sibling != null && !classified) {
                 target.put("workspace:" + sibling, "*");
                 continue;
             }
@@ -172,7 +165,8 @@ public final class MavenImport {
                 imp.warn(where, "no version for " + key + "; skipped");
                 continue;
             }
-            target.put(key, d.version());
+            target.put(classified ? key + ":" + d.classifier() : key,
+                    depValue(d.version(), d.exclusions(), scope.equals("runtime")));
         }
         for (String[] ap : processorPaths(pom)) {
             if (ap[2] == null) {
@@ -208,6 +202,17 @@ public final class MavenImport {
             if (p != null && !KNOWN_PLUGINS.contains(p)) imp.warn(where, "plugin " + p + " is not carried over");
         }
         return man;
+    }
+
+    /** A version string, or the object form when there are exclusions or the dependency is runtime-only. */
+    static Object depValue(String version, java.util.Collection<String> exclusions, boolean runtimeOnly) {
+        java.util.List<String> ex = new ArrayList<>(exclusions);
+        if (ex.isEmpty() && !runtimeOnly) return version;
+        Map<String, Object> o = new LinkedHashMap<>();
+        o.put("version", version);
+        if (!ex.isEmpty()) o.put("exclude", new ArrayList<>(new java.util.TreeSet<>(ex)));
+        if (runtimeOnly) o.put("runtimeOnly", Boolean.TRUE);
+        return o;
     }
 
     private static String managedVersion(Pom pom, String key) {

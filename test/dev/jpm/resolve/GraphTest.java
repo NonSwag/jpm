@@ -102,6 +102,33 @@ class GraphTest {
     }
 
     @Test
+    void classifiersAndDependencyOptions() {
+        DepKey natives = DepKey.parse("org.lwjgl:lwjgl:natives-linux");
+        assertEquals("natives-linux", natives.classifier());
+        assertEquals("org.lwjgl:lwjgl:natives-linux", natives.toString());
+        Manifest m = Manifest.parse(Path.of("project.jsonc"), """
+                { "name": "x", "runtime": {
+                    "a:b": { "version": "1.0", "exclude": ["c:d", "e:*"] },
+                    "f:g": { "version": "2.0", "runtimeOnly": true },
+                    "h:i:linux": "3.0" } }
+                """);
+        Manifest.Dependency ab = m.dependencies.get(0);
+        assertEquals("1.0", ab.spec());
+        assertEquals(Set.of("c:d", "e:*"), ab.exclusions());
+        assertTrue(m.dependencies.get(1).runtimeOnly());
+        assertEquals("linux", m.dependencies.get(2).key().classifier());
+        assertThrows(JpmException.class, () -> Manifest.parse(Path.of("project.jsonc"),
+                "{ \"name\": \"x\", \"test\": { \"a:b\": { \"version\": \"1\", \"runtimeOnly\": true } } }"));
+        assertThrows(JpmException.class, () -> Manifest.parse(Path.of("project.jsonc"),
+                "{ \"name\": \"x\", \"runtime\": { \"a:b\": { \"version\": \"1\", \"excludes\": [] } } }"));
+        // exclusions by group:artifact also cover classified jars
+        assertTrue(Graph.excluded("h:i:linux", Set.of("h:i")));
+        Graph.Pkg p = new Graph.Pkg("h:i:linux", Graph.Kind.MAVEN);
+        assertEquals("i", p.name());
+        assertEquals("linux", p.classifier());
+    }
+
+    @Test
     void manifestErrorsNameTheLine() {
         JpmException e = assertThrows(JpmException.class, () -> Manifest.parse(Path.of("project.jsonc"),
                 "{\n  \"name\": \"x\",\n  \"runtime\": {\n    \"guava\": \"1\"\n  }\n}"));

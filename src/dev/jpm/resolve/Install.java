@@ -61,9 +61,9 @@ public final class Install {
             List<Future<?>> fs = new ArrayList<>();
             for (Graph.Pkg p : todo) {
                 fs.add(pool.submit(() -> {
-                    Path jar = repo.local(p.group(), p.name(), p.version, null, "jar");
+                    Path jar = repo.local(p.group(), p.name(), p.version, p.classifier(), "jar");
                     boolean had = jar.toFile().exists();
-                    jar = repo.require(p.group(), p.name(), p.version, null, "jar");
+                    jar = repo.require(p.group(), p.name(), p.version, p.classifier(), "jar");
                     if (!had) Log.debug("downloaded " + p);
                     String sha = Hash.sha256(jar);
                     if (p.sha256 != null && !p.sha256.equals(sha)) {

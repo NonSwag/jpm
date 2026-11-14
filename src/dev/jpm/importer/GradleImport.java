@@ -52,7 +52,12 @@ public final class GradleImport {
         List<String> testJava = List.of();
     }
 
-    record GDep(String project, String group, String name, String version, String category, String raw) {}
+    record GDep(String project, String group, String name, String version, String category, String raw,
+                String classifier, List<String> excludes) {
+        GDep(String project, String group, String name, String version, String category, String raw) {
+            this(project, group, name, version, category, raw, null, List.of());
+        }
+    }
 
     public static Imported run(Path dir, dev.jpm.maven.MavenRepo repo) {
         Path launcher = launcher(dir);
@@ -140,8 +145,14 @@ public final class GradleImport {
             List<GDep> list = new ArrayList<>();
             for (Object o : (List<Object>) e.getValue()) {
                 Map<String, Object> d = (Map<String, Object>) o;
+                List<String> ex = new ArrayList<>();
+                for (Object x : (List<Object>) d.getOrDefault("excludes", List.of())) {
+                    Map<String, Object> xm = (Map<String, Object>) x;
+                    String g = (String) xm.get("group"), mod = (String) xm.get("module");
+                    if (g != null) ex.add(g + ":" + (mod == null ? "*" : mod));
+                }
                 list.add(new GDep((String) d.get("project"), (String) d.get("group"), (String) d.get("name"),
-                        (String) d.get("version"), (String) d.get("category"), null));
+                        (String) d.get("version"), (String) d.get("category"), null, (String) d.get("classifier"), ex));
             }
             p.deps.put(e.getKey(), list);
         }
@@ -410,7 +421,8 @@ public final class GradleImport {
                 if (q.find() && q.start() <= 1) {
                     String[] parts = q.group(1).split(":");
                     if (parts.length >= 2) {
-                        list.add(new GDep(null, parts[0], parts[1], parts.length >= 3 ? parts[2] : null, null, arg));
+                        list.add(new GDep(null, parts[0], parts[1], parts.length >= 3 ? parts[2] : null, null, arg,
+                                parts.length >= 4 ? parts[3] : null, List.of()));
                         continue;
                     }
                 }
@@ -581,10 +593,10 @@ public final class GradleImport {
             for (String d : p.mainJava) {
                 if (!d.equals(expectedMain) && !d.endsWith("src/main/kotlin")) imp.warn(where, "source directory " + d + " is not built; jpm uses " + expectedMain);
             }
-            Map<String, String> runtime = new TreeMap<>(), dev = new TreeMap<>(), test = new TreeMap<>();
+            Map<String, Object> runtime = new TreeMap<>(), dev = new TreeMap<>(), test = new TreeMap<>();
             for (Map.Entry<String, List<GDep>> e : p.deps.entrySet()) {
                 String conf = e.getKey();
-                Map<String, String> target = switch (conf) {
+                Map<String, Object> target = switch (conf) {
                     case "api", "implementation", "runtimeOnly" -> runtime;
                     case "compileOnly", "compileOnlyApi", "annotationProcessor" -> dev;
                     default -> test;
@@ -618,8 +630,8 @@ public final class GradleImport {
                             continue;
                         }
                     }
-                    if (conf.equals("runtimeOnly")) imp.warn(where, key + " was runtimeOnly in Gradle; jpm puts it on the compile classpath too");
-                    target.put(key, version);
+                    String k = d.classifier() != null && !d.classifier().isEmpty() ? key + ":" + d.classifier() : key;
+                    target.put(k, MavenImport.depValue(version, d.excludes(), conf.equals("runtimeOnly")));
                 }
             }
             if (!runtime.isEmpty()) man.put("runtime", runtime);

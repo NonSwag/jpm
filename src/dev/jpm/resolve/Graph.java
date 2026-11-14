@@ -57,12 +57,20 @@ public final class Graph {
             this.kind = kind;
         }
 
+        /** Maven group (first part of the id). */
         public String group() {
-            return id.substring(0, id.indexOf(':'));
+            return id.split(":")[0];
         }
 
+        /** Maven artifact (second part of the id). */
         public String name() {
-            return id.substring(id.indexOf(':') + 1);
+            return id.split(":")[1];
+        }
+
+        /** Maven classifier (third part of the id), or null. */
+        public String classifier() {
+            String[] p = id.split(":");
+            return kind == Kind.MAVEN && p.length > 2 ? p[2] : null;
         }
 
         @Override
@@ -83,9 +91,9 @@ public final class Graph {
 
     public static boolean excluded(String id, Set<String> exclusions) {
         if (exclusions.isEmpty()) return false;
-        int c = id.indexOf(':');
-        if (c < 0) return false;
-        String g = id.substring(0, c), a = id.substring(c + 1);
+        String[] parts = id.split(":");
+        if (parts.length < 2) return false;
+        String g = parts[0], a = parts[1];
         for (String e : exclusions) {
             int ec = e.indexOf(':');
             String eg = ec < 0 ? e : e.substring(0, ec), ea = ec < 0 ? "*" : e.substring(ec + 1);

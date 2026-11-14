@@ -32,7 +32,15 @@ public final class Manifest {
         public boolean hasSource() { return value != null || env != null; }
     }
 
-    public record Dependency(DepKey key, String spec, Scope scope, int line) {}
+    /**
+     * A declared dependency. Written as a version string, or as an object
+     * {@code {"version": "...", "exclude": [...], "runtimeOnly": true}}.
+     */
+    public record Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly) {
+        public Dependency(DepKey key, String spec, Scope scope, int line) {
+            this(key, spec, scope, line, Set.of(), false);
+        }
+    }
 
     public final Path file;
     public final String source;
@@ -110,14 +118,13 @@ public final class Manifest {
             if (n == null) continue;
             if (!n.isObject()) throw err(n, s.key + " must be an object of dependency to version");
             for (Jsonc.Member e : n.members.values()) {
-                if (!e.value.isString()) throw err(e.value, "version of " + e.key + " must be a string");
                 DepKey key;
                 try {
                     key = DepKey.parse(e.key);
                 } catch (JpmException ex) {
                     throw new JpmException(file + ":" + line(e.keyStart) + ": " + ex.getMessage());
                 }
-                deps.add(new Dependency(key, (String) e.value.value, s, line(e.keyStart)));
+                deps.add(dependency(key, e, s));
             }
         }
         Map<DepKey, Scope> seen = new TreeMap<>();
@@ -163,6 +170,36 @@ public final class Manifest {
         this.nativeArgs = stringList("nativeArgs");
         this.layout = Layout.named(str("layout", false));
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
+    }
+
+    private Dependency dependency(DepKey key, Jsonc.Member e, Scope s) {
+        int ln = line(e.keyStart);
+        Jsonc.Node v = e.value;
+        if (v.isString()) return new Dependency(key, (String) v.value, s, ln);
+        if (!v.isObject()) {
+            throw err(v, "dependency " + e.key + " must be a version string or {\"version\": ..., \"exclude\": [...], \"runtimeOnly\": true}");
+        }
+        for (String k : v.members.keySet()) {
+            if (!Set.of("version", "exclude", "runtimeOnly").contains(k)) throw err(v.get(k), "unknown dependency option \"" + k + "\"");
+        }
+        Jsonc.Node ver = v.get("version");
+        if (ver == null || !ver.isString()) throw err(v, "dependency " + e.key + " needs a \"version\" string");
+        Set<String> excl = new java.util.TreeSet<>();
+        Jsonc.Node ex = v.get("exclude");
+        if (ex != null) {
+            if (!ex.isArray()) throw err(ex, "exclude must be an array of \"group:artifact\" (artifact may be *)");
+            for (Jsonc.Node i : ex.items) {
+                if (!i.isString() || !((String) i.value).matches("[^:\\s]+(:[^:\\s]+)?")) {
+                    throw err(i, "exclude entries look like \"group:artifact\", \"group:*\" or \"group\"");
+                }
+                excl.add((String) i.value);
+            }
+        }
+        Jsonc.Node ro = v.get("runtimeOnly");
+        boolean runtimeOnly = ro != null && Boolean.TRUE.equals(ro.value);
+        if (ro != null && !(ro.value instanceof Boolean)) throw err(ro, "runtimeOnly must be true or false");
+        if (runtimeOnly && s != Scope.RUNTIME) throw err(ro, "runtimeOnly applies to \"runtime\" dependencies only");
+        return new Dependency(key, (String) ver.value, s, ln, excl, runtimeOnly);
     }
 
     private Define parseDefine(Jsonc.Member e) {

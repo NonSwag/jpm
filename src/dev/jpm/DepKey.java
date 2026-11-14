@@ -8,12 +8,14 @@ import java.util.Locale;
  * A dependency name as written in the manifest.
  *
  * <ul>
- *   <li>{@code group:artifact} — Maven</li>
+ *   <li>{@code group:artifact} — Maven; {@code group:artifact:classifier} for a classified jar
+ *       such as {@code natives-linux}</li>
  *   <li>{@code github:user/repo} or {@code github:user/repo/module} — Git (also {@code gitlab:}, {@code codeberg:})</li>
  *   <li>{@code workspace:module} — a sibling module in the same workspace</li>
  * </ul>
  */
 public record DepKey(Kind kind, String host, String group, String artifact, String module) implements Comparable<DepKey> {
+    // `module` is the Git module, or the Maven classifier.
 
     public enum Kind { MAVEN, GIT, WORKSPACE }
 
@@ -37,17 +39,29 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
                 return new DepKey(Kind.WORKSPACE, null, null, rest, null);
             }
             default -> {
-                String[] parts = s.split(":");
-                if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
-                    throw new JpmException("Invalid Maven dependency \"" + s + "\": expected group:artifact (put the version on the right-hand side)");
+                String[] parts = s.split(":", -1);
+                boolean ok = parts.length >= 2 && parts.length <= 3;
+                for (String p : parts) ok &= !p.isEmpty();
+                if (!ok || (parts.length == 3 && Character.isDigit(parts[2].charAt(0)))) {
+                    throw new JpmException("Invalid Maven dependency \"" + s + "\": expected group:artifact or group:artifact:classifier"
+                            + " (put the version on the right-hand side)");
                 }
-                return new DepKey(Kind.MAVEN, null, parts[0], parts[1], null);
+                return new DepKey(Kind.MAVEN, null, parts[0], parts[1], parts.length == 3 ? parts[2] : null);
             }
         }
     }
 
     public static DepKey maven(String group, String artifact) {
         return new DepKey(Kind.MAVEN, null, group, artifact, null);
+    }
+
+    public static DepKey maven(String group, String artifact, String classifier) {
+        return new DepKey(Kind.MAVEN, null, group, artifact, classifier == null || classifier.isEmpty() ? null : classifier);
+    }
+
+    /** Maven classifier, or null. */
+    public String classifier() {
+        return kind == Kind.MAVEN ? module : null;
     }
 
     public boolean isGit() { return kind == Kind.GIT; }
@@ -96,7 +110,7 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
     @Override
     public String toString() {
         return switch (kind) {
-            case MAVEN -> group + ":" + artifact;
+            case MAVEN -> group + ":" + artifact + (module != null ? ":" + module : "");
             case GIT -> host + ":" + group + "/" + artifact + (module != null ? "/" + module : "");
             case WORKSPACE -> "workspace:" + artifact;
         };
