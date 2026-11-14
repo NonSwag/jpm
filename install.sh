@@ -4,7 +4,8 @@
 #   curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh
 #
 # JPM_VERSION=0.1.0 picks a version, JPM_HOME changes the install root, and JPM_INSTALL_BASE replaces the
-# download URL (a mirror, or file:///path for testing). Nothing outside JPM_HOME is changed.
+# download URL (a mirror, or file:///path for testing). The install folder is added to PATH in your shell's
+# startup file (one marked line, added once); JPM_NO_MODIFY_PATH=1 skips that.
 set -eu
 
 repo="${JPM_REPO:-NonSwag/jpm}"
@@ -53,7 +54,48 @@ mv -f "$tmp/jpm" "$dir/jpm"
 ln -sf jpm "$dir/jvm"
 
 echo "Installed $("$dir/jpm" --version) to $dir (with jvm)"
-case ":$PATH:" in
-  *":$dir:"*) ;;
-  *) echo "Add it to your PATH, for example in ~/.profile:  export PATH=\"$dir:\$PATH\"" ;;
+
+# Put the install folder on PATH for future shells.
+case "$dir" in
+  "$HOME"/*) shown="\$HOME${dir#"$HOME"}" ;;
+  *) shown="$dir" ;;
 esac
+add_line() { # file line
+  mkdir -p "$(dirname "$1")"
+  if [ -f "$1" ] && grep -qsF -e "$dir" -e "$shown" "$1"; then
+    return 1
+  fi
+  if [ -f "$1" ] && [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf '\n' >> "$1"; fi
+  printf '\n# Added by the jpm installer\n%s\n' "$2" >> "$1"
+  echo "Added $shown to PATH in $1"
+  return 0
+}
+case ":$PATH:" in
+  *":$dir:"*) on_path=yes ;;
+  *) on_path=no ;;
+esac
+if [ -n "${JPM_NO_MODIFY_PATH:-}" ]; then
+  [ "$on_path" = yes ] || echo "PATH not changed (JPM_NO_MODIFY_PATH). Add it yourself:  export PATH=\"$shown:\$PATH\""
+elif [ "$on_path" = no ]; then
+  posix_line="export PATH=\"$shown:\$PATH\""
+  changed=no
+  case "$(basename "${SHELL:-sh}")" in
+    zsh)
+      add_line "${ZDOTDIR:-$HOME}/.zshrc" "$posix_line" && changed=yes ;;
+    bash)
+      add_line "$HOME/.bashrc" "$posix_line" && changed=yes
+      # macOS terminals start login shells, which read .bash_profile rather than .bashrc
+      if [ "$os" = macos ] || [ -f "$HOME/.bash_profile" ]; then
+        add_line "$HOME/.bash_profile" "$posix_line" && changed=yes
+      fi ;;
+    fish)
+      add_line "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/jpm.fish" "fish_add_path \"$dir\"" && changed=yes ;;
+    *)
+      add_line "$HOME/.profile" "$posix_line" && changed=yes ;;
+  esac
+  if [ "$changed" = yes ]; then
+    echo "Open a new terminal, or run this to use jpm right away:  export PATH=\"$dir:\$PATH\""
+  else
+    echo "Your shell startup file already adds $shown to PATH; open a new terminal to use jpm."
+  fi
+fi

@@ -3,7 +3,8 @@
 #   irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex
 #
 # $env:JPM_VERSION picks a version, $env:JPM_HOME changes the install root, and $env:JPM_INSTALL_BASE
-# replaces the download URL. Nothing outside JPM_HOME is changed.
+# replaces the download URL. The install folder is added to your user PATH (once); set
+# $env:JPM_NO_MODIFY_PATH to skip that.
 $ErrorActionPreference = 'Stop'
 
 $repo = if ($env:JPM_REPO) { $env:JPM_REPO } else { 'NonSwag/jpm' }
@@ -37,9 +38,16 @@ try {
     Copy-Item -Force (Join-Path $dir 'jpm.exe') (Join-Path $dir 'jvm.exe')
     $version = & (Join-Path $dir 'jpm.exe') --version
     Write-Host "Installed $version to $dir (with jvm.exe)"
-    if (-not (($env:PATH -split ';') -contains $dir)) {
-        Write-Host "Add it to your PATH:  [Environment]::SetEnvironmentVariable('PATH', `"$dir;`" + [Environment]::GetEnvironmentVariable('PATH', 'User'), 'User')"
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    $onUserPath = (($userPath -split ';') | Where-Object { $_ -and ($_.TrimEnd('\') -ieq $dir.TrimEnd('\')) }).Count -gt 0
+    if ($env:JPM_NO_MODIFY_PATH) {
+        if (-not $onUserPath) { Write-Host "PATH not changed (JPM_NO_MODIFY_PATH). Add $dir to your PATH yourself." }
+    } elseif (-not $onUserPath) {
+        $newPath = if ($userPath) { "$dir;$userPath" } else { $dir }
+        [Environment]::SetEnvironmentVariable('PATH', $newPath, 'User')
+        Write-Host "Added $dir to your user PATH. Open a new terminal to use jpm everywhere."
     }
+    if (-not (($env:PATH -split ';') -contains $dir)) { $env:PATH = "$dir;$env:PATH" }
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
