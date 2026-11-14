@@ -119,10 +119,25 @@ public final class Toolchain {
         return j;
     }
 
-    private static Jdk probeInstalled(Path dir) {
+    /**
+     * The JDK inside an installed directory: the directory itself, a macOS bundle's Contents/Home, or one
+     * nested a few levels down (Zulu's macOS archives hold zulu-21.jdk/Contents/Home).
+     */
+    static Jdk probeInstalled(Path dir) {
         Jdk j = Jdk.probe(dir);
-        if (j == null && Files.isDirectory(dir.resolve("Contents/Home"))) j = Jdk.probe(dir.resolve("Contents/Home"));
-        return j;
+        if (j != null) return j;
+        try (Stream<Path> s = Files.walk(dir, 4)) {
+            List<Path> homes = s.filter(Files::isDirectory)
+                    .filter(p -> Files.isRegularFile(p.resolve("release")) && Files.isDirectory(p.resolve("bin")))
+                    .sorted(Comparator.comparingInt(Path::getNameCount))
+                    .toList();
+            for (Path h : homes) {
+                j = Jdk.probe(h);
+                if (j != null) return j;
+            }
+        } catch (IOException ignored) {
+        }
+        return null;
     }
 
     static void extract(Path archive, Path dir) {

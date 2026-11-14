@@ -89,9 +89,20 @@ public final class Foojay {
             if (spec.major() != null && p.major != spec.major()) continue;
             if (spec.exact() && !JavaSpec.versionMatches(p.javaVersion, spec.version())) continue;
             if (libc != null && p.libc.equals(otherLibc(libc))) continue;
-            if (best == null || Version.of(p.javaVersion).compareTo(Version.of(best.javaVersion)) > 0) best = p;
+            if (best == null) { best = p; continue; }
+            int c = Version.of(p.javaVersion).compareTo(Version.of(best.javaVersion));
+            // same version: prefer tar.gz, which keeps symlinks and permissions (zip does not)
+            if (c > 0 || (c == 0 && archiveRank(p.archiveType) < archiveRank(best.archiveType))) best = p;
         }
         return best;
+    }
+
+    private static int archiveRank(String type) {
+        return switch (type == null ? "" : type) {
+            case "tar.gz", "tgz" -> 0;
+            case "zip" -> 1;
+            default -> 2;
+        };
     }
 
     private static String otherLibc(String libc) {

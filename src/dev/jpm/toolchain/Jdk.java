@@ -72,7 +72,10 @@ public record Jdk(Path home, int major, String version, boolean graal, String di
         List<Path> homes = new ArrayList<>();
         String jh = System.getenv("JAVA_HOME");
         if (jh != null && !jh.isBlank()) homes.add(Path.of(jh));
-        homes.addAll(children(managedRoot()));
+        for (Path m : children(managedRoot())) {
+            Jdk nested = Toolchain.probeInstalled(m);
+            homes.add(nested != null ? nested.home() : m);
+        }
         Path onPath = Exec.which("javac");
         if (onPath != null) {
             try {
@@ -150,14 +153,13 @@ public record Jdk(Path home, int major, String version, boolean graal, String di
         return new Jdk(home, major, version, graal, distribution, managed);
     }
 
-    /** The metadata file for a jpm-installed JDK: in the home, or at the top of a macOS bundle. */
+    /** The metadata file for a jpm-installed JDK. */
     private static Path metadataFile(Path home) {
-        Path m = home.resolve(METADATA);
-        if (Files.exists(m)) return m;
-        if (home.getFileName() != null && home.getFileName().toString().equals("Home") && home.getParent() != null
-                && home.getParent().getParent() != null) {
-            Path b = home.getParent().getParent().resolve(METADATA);
-            if (Files.exists(b)) return b;
+        // jpm writes it at the top of the install directory, which may be a few levels above the home
+        Path p = home;
+        for (int i = 0; i < 4 && p != null; i++, p = p.getParent()) {
+            Path m = p.resolve(METADATA);
+            if (Files.exists(m)) return m;
         }
         return null;
     }

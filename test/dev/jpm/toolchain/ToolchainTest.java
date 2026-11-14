@@ -79,6 +79,41 @@ class ToolchainTest {
     }
 
     @Test
+    void extractsZipsIntoUnnormalizedPaths(@TempDir Path dir) throws Exception {
+        Path zip = dir.resolve("a.zip");
+        try (var out = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(zip))) {
+            out.putNextEntry(new java.util.zip.ZipEntry("jdk/bin/x"));
+            out.write(1);
+            out.closeEntry();
+        }
+        Path target = dir.resolve("sub").resolve("..").resolve("out");
+        dev.jpm.build.Jars.extract(zip, target);
+        assertTrue(java.nio.file.Files.exists(dir.resolve("out/jdk/bin/x")));
+    }
+
+    @Test
+    void prefersTarOverZip() {
+        Foojay.Package zip = new Foojay.Package("z", "zulu", "21.0.5", 21, "a.zip", "zip", "", "u");
+        Foojay.Package tar = new Foojay.Package("t", "zulu", "21.0.5", 21, "a.tar.gz", "tar.gz", "", "u");
+        assertEquals("t", Foojay.choose(List.of(zip, tar), JavaSpec.parse("21"), null).id());
+        assertEquals("t", Foojay.choose(List.of(tar, zip), JavaSpec.parse("21"), null).id());
+    }
+
+    @Test
+    void findsNestedJdkHomes(@TempDir Path dir) {
+        // Zulu's macOS layout: <top>/zulu-21.jdk/Contents/Home, metadata written at <top>
+        String javac = System.getProperty("os.name").toLowerCase().contains("win") ? "javac.exe" : "javac";
+        Path home = dir.resolve("zulu-21.jdk/Contents/Home");
+        Fs.write(home.resolve("bin").resolve(javac), "");
+        Fs.write(home.resolve("release"), "IMPLEMENTOR=\"Azul Systems, Inc.\"\nJAVA_VERSION=\"21.0.5\"\n");
+        Fs.write(dir.resolve(Jdk.METADATA), "zulu\n21.0.5\n");
+        Jdk j = Toolchain.probeInstalled(dir);
+        assertEquals(home, j.home());
+        assertTrue(j.managed());
+        assertEquals("zulu", j.distribution());
+    }
+
+    @Test
     void recognizesVendors() {
         assertEquals("temurin", Jdk.distributionOf("Eclipse Adoptium", "", false));
         assertEquals("zulu", Jdk.distributionOf("Azul Systems, Inc.", "", false));

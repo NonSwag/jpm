@@ -20,8 +20,8 @@ public final class Fs {
     /** Global JPM home: {@code $JPM_HOME} or {@code ~/.jpm}. */
     public static Path home() {
         String env = System.getenv("JPM_HOME");
-        if (env != null && !env.isBlank()) return Path.of(env);
-        return Path.of(System.getProperty("user.home"), ".jpm");
+        if (env != null && !env.isBlank()) return Path.of(env).toAbsolutePath().normalize();
+        return Path.of(System.getProperty("user.home"), ".jpm").toAbsolutePath().normalize();
     }
 
     /** True with --offline or JPM_OFFLINE: use only what is cached. */

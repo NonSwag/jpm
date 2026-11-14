@@ -123,6 +123,7 @@ public final class Jars {
     }
 
     public static void extract(Path jar, Path dir) {
+        dir = dir.toAbsolutePath().normalize();
         Fs.mkdirs(dir);
         try (ZipFile zf = new ZipFile(jar.toFile())) {
             Enumeration<? extends ZipEntry> en = zf.entries();
