@@ -700,13 +700,63 @@ final class Commands {
     // ---------------------------------------------------------------- info
 
     /**
+     * Packages on a module's classpaths with the narrowest IDE scope that covers them: compile (needed to
+     * compile and run), provided (compile only: dev dependencies), runtime (run only) and test.
+     */
+    private List<Object> ideDependencies(Ctx c, Builder b, Project.Module m) {
+        List<Graph.Edge> runtime = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
+        List<Graph.Edge> devOnly = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.DEV);
+        List<Graph.Edge> test = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.TEST);
+        Map<String, String> scopes = new LinkedHashMap<>();
+        for (String id : c.graph.closure(runtime, true)) scopes.putIfAbsent(id, "compile");
+        for (String id : c.graph.closure(runtime, false)) scopes.putIfAbsent(id, "runtime");
+        for (String id : c.graph.closure(devOnly, false)) {
+            if ("runtime".equals(scopes.get(id))) scopes.put(id, "compile");
+            else scopes.putIfAbsent(id, "provided");
+        }
+        for (String id : c.graph.closure(test, false)) scopes.putIfAbsent(id, "test");
+        List<Object> out = new ArrayList<>();
+        for (Map.Entry<String, String> e : scopes.entrySet()) {
+            Graph.Pkg p = c.graph.get(e.getKey());
+            if (p == null) continue;
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("id", p.id);
+            d.put("scope", e.getValue());
+            if (p.kind == Graph.Kind.LOCAL) {
+                d.put("module", p.id.substring("workspace:".length()));
+            } else {
+                d.put("version", p.version);
+                List<String> jars = b.paths(p.id, m).stream().map(Path::toString).toList();
+                if (jars.isEmpty()) continue;
+                d.put("jars", jars);
+                Path sources = null;
+                if (p.kind == Graph.Kind.MAVEN) {
+                    DepKey k = DepKey.parse(p.id);
+                    if (k.classifier() == null) sources = c.repo().fetch(k.group(), k.artifact(), p.version, "sources", "jar");
+                } else if (p.dir != null) {
+                    for (String rel : List.of("src/main/java", "src")) {
+                        if (Files.isDirectory(p.dir.resolve(rel))) { sources = p.dir.resolve(rel); break; }
+                    }
+                }
+                if (sources != null) d.put("sources", sources.toString());
+            }
+            out.add(d);
+        }
+        return out;
+    }
+
+    /**
      * {@code jpm info --json}: the project as extensions see it. The output is a stable contract: fields are
      * only ever added. With {@code --classpath}, each module also lists its compile classpath (which may
-     * build Git dependencies first).
+     * build Git dependencies first). With {@code --ide}, each module also lists its test folders, the folders
+     * an IDE should exclude, its scripts, and {@code ideDependencies}: every package on its classpaths with
+     * the narrowest scope it is needed in, workspace modules as module references (nothing of the project is
+     * compiled) and jars with their sources where available.
      */
     int info(List<String> args) {
         boolean json = flag(args, "--json");
         boolean withClasspath = flag(args, "--classpath");
+        boolean ide = flag(args, "--ide");
         noMoreFlags(args);
         Ctx c = open(false);
         Builder b = c.builder(Env.Mode.PRODUCTION);
@@ -719,6 +769,7 @@ final class Commands {
         out.put("workspace", c.project.root.isWorkspaceRoot());
         out.put("repositories", c.project.root.repositories);
         out.put("extensions", c.project.root.extensions);
+        if (ide) out.put("scripts", new ArrayList<>(c.project.root.scripts.keySet()));
         List<Object> modules = new ArrayList<>();
         for (Project.Module m : c.project.buildOrder()) {
             Map<String, Object> mod = new LinkedHashMap<>();
@@ -785,6 +836,13 @@ final class Commands {
             mod.put("extensions", mf.extensions);
             if (withClasspath) {
                 mod.put("compileClasspath", b.classpath(m, Builder.Cp.COMPILE).stream().map(Path::toString).toList());
+            }
+            if (ide) {
+                mod.put("testDir", m.testDir().toString());
+                mod.put("testResourceDir", m.testResourcesDir().toString());
+                mod.put("excludeDirs", List.of(m.dir.resolve(".cache").toString(), m.dir.resolve("dist").toString()));
+                mod.put("scripts", new ArrayList<>(mf.scripts.keySet()));
+                mod.put("ideDependencies", ideDependencies(c, b, m));
             }
             modules.add(mod);
         }
