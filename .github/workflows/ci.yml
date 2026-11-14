@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -107,8 +108,70 @@ jobs:
           ./dist/smoke${{ matrix.exe }} | tee native.txt
           grep -q "Hello from smoke! ko App.Pair(a=x, b=y)" native.txt
 
+      - name: Test the install script against this build
+        run: |
+          set -eux
+          rel="$RUNNER_TEMP/release"
+          mkdir -p "$rel"
+          cp "dist/jpm${{ matrix.exe }}" "$rel/jpm-${{ matrix.name }}${{ matrix.exe }}"
+          cd "$rel" && (sha256sum * 2>/dev/null || shasum -a 256 *) > SHA256SUMS && cat SHA256SUMS
+          if [ "${{ matrix.exe }}" = "" ]; then
+            JPM_HOME="$RUNNER_TEMP/inst" JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
+            "$RUNNER_TEMP/inst/bin/jvm" list
+          fi
+
+      - name: Test install.ps1 against this build
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:JPM_HOME = Join-Path $env:RUNNER_TEMP 'inst'
+          $env:JPM_INSTALL_BASE = ([Uri](Join-Path $env:RUNNER_TEMP 'release')).AbsoluteUri
+          & "$env:GITHUB_WORKSPACE\install.ps1"
+          & (Join-Path $env:JPM_HOME 'bin\jvm.exe') list
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: jpm-${{ matrix.name }}
           path: dist/jpm${{ matrix.exe }}
           if-no-files-found: error
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the manifest version
+        run: |
+          version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in project.jsonc"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release files
+        run: |
+          set -eux
+          mkdir release
+          for d in artifacts/jpm-*; do
+            platform="${d#artifacts/jpm-}"
+            for f in "$d"/*; do
+              case "$f" in *.exe) cp "$f" "release/jpm-$platform.exe" ;; *) cp "$f" "release/jpm-$platform" ;; esac
+            done
+          done
+          cp install.sh install.ps1 release/
+          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --title "jpm ${GITHUB_REF_NAME#v}" --generate-notes

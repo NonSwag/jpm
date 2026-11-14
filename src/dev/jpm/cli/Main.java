@@ -9,7 +9,8 @@ import java.util.List;
 
 /** {@code jpm} — the Java package manager and build tool. */
 public final class Main {
-    public static final String VERSION = "0.1.0";
+    /** From project.jsonc, through jpm's own build-time defines. */
+    public static final String VERSION = dev.jpm.BuildConfig.VERSION;
 
     private Main() {}
 

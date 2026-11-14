@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "java": "21",
   "main": "dev.jpm.cli.Main",
+  // generated with NAME and VERSION from this manifest; Main reads the version from it
+  "defineClass": "dev.jpm.BuildConfig",
   "runtime": {},
   "test": {
     "org.junit.jupiter:junit-jupiter": "5.11.4"

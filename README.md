@@ -8,9 +8,22 @@ from Git and Maven Central, building, running, defines, env files, patches, work
 hooks, extensions) and JDK/GraalVM management with native builds (`jpm java`, `jvm`,
 `build --native`). Importing Maven and Gradle projects is step 3.
 
+## Install
+
+```sh
+curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh      # Linux, macOS
+irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex           # Windows
+```
+
+The scripts download the native binary for your platform, check it against the release's
+`SHA256SUMS`, and put `jpm` and `jvm` into `~/.jpm/bin`. They change nothing else; add that folder to
+your PATH yourself. Releases are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows
+(x64) when a `v*` tag is pushed; the tag must match the version in `project.jsonc`.
+
 ## Getting started
 
 ```sh
+# or from source:
 ./bootstrap.sh            # compiles jpm with javac, then jpm builds itself into dist/
 export PATH="$PWD/bin:$PATH"
 
