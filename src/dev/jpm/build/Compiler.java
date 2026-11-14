@@ -71,7 +71,8 @@ public final class Compiler {
             writeState(r.stateFile, s);
             return false;
         }
-        boolean processors = !r.processorPath.isEmpty();
+        // Annotation processors and named modules both need every source in one javac run.
+        boolean processors = !r.processorPath.isEmpty() || Modules.moduleInfo(r.sourceRoots) != null;
         if (old == null || !key.equals(old.key) || !Files.isDirectory(r.outDir)) {
             full(r, sources, hashes, key);
             return true;
@@ -221,7 +222,25 @@ public final class Compiler {
         List<Path> cp = new ArrayList<>();
         if (outDirOnClasspath) cp.add(r.outDir);
         cp.addAll(r.classpath);
-        if (!cp.isEmpty()) {
+        Path moduleInfo = Modules.moduleInfo(r.sourceRoots);
+        if (moduleInfo != null && r.jdk.major() >= 9) {
+            // A named module: its `requires` come from the module path; other jars stay on the class path,
+            // which the module may read.
+            Modules.Declaration decl = Modules.parse(moduleInfo);
+            List<List<Path>> split = Modules.split(decl, cp);
+            if (!split.get(0).isEmpty()) {
+                args.add("--module-path");
+                args.add(join(split.get(0)));
+            }
+            if (!split.get(1).isEmpty()) {
+                args.add("-cp");
+                args.add(join(split.get(1)));
+                if (decl.name() != null) {
+                    args.add("--add-reads");
+                    args.add(decl.name() + "=ALL-UNNAMED");
+                }
+            }
+        } else if (!cp.isEmpty()) {
             args.add("-cp");
             args.add(join(cp));
         }

@@ -210,6 +210,21 @@ classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts an
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
+## Java modules
+
+A module with `src/module-info.java` (or `src/main/java/module-info.java` in the Maven layout) builds
+and runs as a named module, with nothing to configure:
+
+- **Compiling:** dependencies that are modules (they have a `module-info.class` or an
+  `Automatic-Module-Name`), and any jar whose automatic module name your `module-info.java`
+  `requires`, go on the module path. Everything else stays on the class path, which the module can
+  read. `requires static` fits `dev` dependencies such as annotations. A named module is always compiled
+  as a whole; the per-module cache still skips it when nothing changed.
+- **Running:** `jpm start` and `jpm dev` start it with `-m <module>/<main>`, so `provides`, `uses`,
+  exports and encapsulation behave as declared; `assets/` is patched into the module.
+- Tests compile and run on the class path, so they can reach internal packages. `java -jar` and
+  bundles also use the class path, where the JDK ignores `module-info`.
+
 ## Bundles (jar-in-jar isolation)
 
 `jpm build --bundle` (or `"package": "bundle"`) writes `dist/<name>-<version>-bundle.jar`, which runs

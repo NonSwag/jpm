@@ -574,11 +574,52 @@ final class Commands {
         }
         String opts = System.getenv("JPM_JVM_ARGS");
         if (opts != null && !opts.isBlank()) cmd.addAll(List.of(opts.trim().split("\\s+")));
-        cmd.add("-cp");
-        cmd.add(Compiler.join(b.runtimeClasspath(m)));
-        cmd.add(main);
+        cmd.addAll(launchArgs(b, m, main));
         cmd.addAll(appArgs);
         return cmd;
+    }
+
+    /**
+     * How to start a module's main class. A named module (module-info.class in its classes) runs as a module,
+     * so `provides`, `uses`, exports and strong encapsulation behave as declared; anything else runs on the
+     * class path.
+     */
+    static List<String> launchArgs(Builder b, Project.Module m, String main) {
+        Path classes = Builder.classesDir(m);
+        String module = dev.jpm.build.Modules.declaredName(classes);
+        List<String> args = new ArrayList<>();
+        if (module == null) {
+            args.add("-cp");
+            args.add(Compiler.join(b.runtimeClasspath(m)));
+            args.add(main);
+            return args;
+        }
+        Path moduleInfo = dev.jpm.build.Modules.moduleInfo(List.of(m.srcDir()));
+        dev.jpm.build.Modules.Declaration decl = moduleInfo != null ? dev.jpm.build.Modules.parse(moduleInfo)
+                : new dev.jpm.build.Modules.Declaration(module, Set.of());
+        List<List<Path>> split = dev.jpm.build.Modules.split(decl, b.classpath(m, Builder.Cp.RUNTIME));
+        List<Path> modulePath = new ArrayList<>();
+        modulePath.add(classes);
+        modulePath.addAll(split.get(0));
+        args.add("--module-path");
+        args.add(Compiler.join(modulePath));
+        if (Files.isDirectory(m.assetsDir())) {
+            // resources live next to the classes of the module
+            args.add("--patch-module");
+            args.add(module + "=" + m.assetsDir());
+        }
+        if (!split.get(1).isEmpty()) {
+            args.add("-cp");
+            args.add(Compiler.join(split.get(1)));
+            args.add("--add-reads");
+            args.add(module + "=ALL-UNNAMED");
+        }
+        // resolve every module on the path, so services they provide are found too
+        args.add("--add-modules");
+        args.add("ALL-MODULE-PATH");
+        args.add("-m");
+        args.add(module + "/" + main);
+        return args;
     }
 
     private static String mainClass(Project.Module m, String entry) {
