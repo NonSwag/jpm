@@ -161,6 +161,11 @@ jobs:
               printf 'command -v java\n' | env -u JPM_HOME HOME="$home" zsh -i 2>/dev/null | tee which.txt
               grep -q '.jpm/bin/java' which.txt
             fi
+            # take the competing JDK out again: the checks below run single commands (`bash -ic`), which show
+            # no prompt, so the prompt hook does not run for them
+            for f in "$home/.bashrc" "$home/.zshrc"; do
+              [ -f "$f" ] && grep -v 'otherjdk' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            done
             env -u JPM_HOME HOME="$home" bash -ic 'command -v jpm && jvm list && jpm --version'
             # the java shim: inside a project its "java", elsewhere `jvm use`, otherwise the java already on PATH
             test -L "$home/.jpm/bin/java"
