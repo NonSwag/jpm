@@ -2,6 +2,7 @@
 {
   "name": "jpm",
   "version": "0.4.0",
+  "license": "MIT",
   "java": "21",
   "main": "dev.jpm.cli.Main",
   // generated with NAME and VERSION from this manifest; Main reads the version from it

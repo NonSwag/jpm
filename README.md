@@ -344,3 +344,7 @@ jar and is picked up by native-image automatically.
 - Changesets: `.changeset/` is reserved only. The IntelliJ plugin is a separate project.
 - The resolver is jpm's own rather than an embedded Coursier or Maven Resolver, to keep jpm free of
   dependencies for native-image. It does not evaluate POM profiles or Gradle module metadata.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
