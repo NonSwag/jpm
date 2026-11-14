@@ -57,17 +57,28 @@ result more carefully.
 
 ### Your files stay where they are
 
-Imported manifests contain `"layout": "maven"`, so jpm builds from `src/main/java`,
-`src/main/resources`, `src/test/java` and `src/test/resources`. You can keep that layout. To use jpm's
-shorter one later, move the folders and drop the `layout` line:
+Imported manifests contain `"layout": "maven"`, so the first build works without moving anything:
+jpm reads `src/main/java`, `src/main/resources`, `src/test/java` and `src/test/resources`.
+
+jpm's standard layout is the recommended one, and the one new projects use:
+
+```
+src/              Java sources (was src/main/java)
+assets/           resources copied into the jar (was src/main/resources)
+test/             test sources (was src/test/java)
+test/resources/   test resources (was src/test/resources)
+```
+
+To switch, move the folders and drop the `layout` line. The sources are moved out of `src/` first,
+because `src/main/java` cannot be moved into `src/` while it is still inside it:
 
 ```sh
-git mv src/main/java java-src
-git mv src/main/resources assets          # if present
-git mv src/test/java test                 # if present
-git mv src/test/resources test/resources  # if present
-find src -type d -empty -delete           # src/ is now empty
-git mv java-src src
+git mv src/main/java .src-tmp              # temporary name, renamed to src/ below
+git mv src/main/resources assets           # if present
+git mv src/test/java test                  # if present
+git mv src/test/resources test/resources   # if present
+find src -type d -empty -delete            # removes what is left of src/main and src/test
+git mv .src-tmp src
 # then remove  "layout": "maven",  from project.jsonc
 ```
 
