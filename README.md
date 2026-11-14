@@ -253,6 +253,8 @@ package that the app also uses.
 
 ## Importing Maven and Gradle projects
 
+Moving a project over? [MIGRATION.md](MIGRATION.md) walks through it step by step.
+
 ```sh
 cd some-maven-or-gradle-project
 jpm import --dry-run      # show the manifests it would write, and what does not carry over
