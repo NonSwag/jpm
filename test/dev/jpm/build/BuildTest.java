@@ -95,6 +95,11 @@ class BuildTest {
         Fs.write(src.resolve("A.java"), "package p; public class A { public long f() { return 2; } }");
         ClassInfo three = compileOne(jdk, dir);
         assertNotEquals(one.abi(), three.abi());
+        Fs.write(src.resolve("A.java"), "package p; public class A { public static final String V = \"1.0\"; }");
+        ClassInfo s1 = compileOne(jdk, dir);
+        Fs.write(src.resolve("A.java"), "package p; public class A { public static final String V = \"2.0\"; }");
+        ClassInfo s2 = compileOne(jdk, dir);
+        assertNotEquals(s1.constants(), s2.constants(), "a String constant change must be seen (javac inlines it)");
         Fs.write(src.resolve("A.java"), "package p; public class A { public static final int K = 1; java.util.List<String> l; }");
         ClassInfo four = compileOne(jdk, dir);
         assertTrue(four.refs().contains("java/util/List"));
