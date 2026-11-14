@@ -17,8 +17,10 @@ irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex   
 ```
 
 The scripts download the native binary for your platform, check it against the release's
-`SHA256SUMS`, and put `jpm` and `jvm` into `~/.jpm/bin`. They change nothing else; add that folder to
-your PATH yourself. Releases are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows
+`SHA256SUMS`, put `jpm` and `jvm` into `~/.jpm/bin`, and add that folder to your PATH: one marked line
+in your shell's startup file (`~/.zshrc`, `~/.bashrc` and on macOS `~/.bash_profile`, fish's
+`conf.d/jpm.fish`, or `~/.profile`), or your user PATH on Windows. It is added once, so re-running
+the script to update is safe. Set `JPM_NO_MODIFY_PATH=1` to skip it. Releases are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows
 (x64) when a `v*` tag is pushed; the tag must match the version in `project.jsonc`.
 
 ## Getting started

@@ -143,8 +143,12 @@ jobs:
           cp "dist/jpm${{ matrix.exe }}" "$rel/jpm-${{ matrix.name }}${{ matrix.exe }}"
           cd "$rel" && (sha256sum * 2>/dev/null || shasum -a 256 *) > SHA256SUMS && cat SHA256SUMS
           if [ "${{ matrix.exe }}" = "" ]; then
-            JPM_HOME="$RUNNER_TEMP/inst" JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
-            "$RUNNER_TEMP/inst/bin/jvm" list
+            # a fresh home, so the PATH setup is checked without touching the runner's
+            home="$RUNNER_TEMP/home" && mkdir -p "$home"
+            HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
+            HOME="$home" SHELL=/bin/bash JPM_INSTALL_BASE="file://$rel" sh "$GITHUB_WORKSPACE/install.sh"
+            test "$(grep -c '.jpm/bin' "$home/.bashrc")" = 1
+            HOME="$home" bash -ic 'jvm list && jpm --version'
           fi
 
       - name: Test install.ps1 against this build
@@ -156,6 +160,8 @@ jobs:
           & "$env:GITHUB_WORKSPACE\install.ps1"
           & (Join-Path $env:JPM_HOME 'bin\jvm.exe') list
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+          if (-not (($userPath -split ';') -contains (Join-Path $env:JPM_HOME 'bin'))) { throw "install.ps1 did not add jpm to the user PATH" }
 
       - uses: actions/upload-artifact@v4
         with:
