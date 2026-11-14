@@ -105,7 +105,7 @@ public final class Jsonc {
     private void skipWs() {
         while (pos < src.length()) {
             char c = src.charAt(pos);
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '﻿') {
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\uFEFF') {
                 pos++;
             } else if (c == '/' && pos + 1 < src.length() && src.charAt(pos + 1) == '/') {
                 while (pos < src.length() && src.charAt(pos) != '\n') pos++;

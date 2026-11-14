@@ -14,7 +14,7 @@ public final class Main {
     private Main() {}
 
     static final String HELP = """
-            jpm %s — one command for Java: dependencies, builds, running, tests and patches.
+            jpm %s - one command for Java: dependencies, builds, running, tests and patches.
 
             Usage: jpm <command> [options]
 

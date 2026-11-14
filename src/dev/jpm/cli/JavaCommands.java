@@ -35,7 +35,7 @@ final class JavaCommands {
     }
 
     static final String JVM_HELP = """
-            jvm — install JDKs and GraalVM and run commands with them, without changing your setup.
+            jvm - install JDKs and GraalVM and run commands with them, without changing your setup.
 
             Usage: jvm <command>
               exec <java> [--] <command...>   Run a command with that JDK as JAVA_HOME and first on PATH
