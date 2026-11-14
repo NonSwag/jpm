@@ -54,6 +54,9 @@ public final class Main {
               build --native              Also build a native executable with GraalVM
               start --trace               Run under the native-image tracing agent to record its config
 
+            Maintenance
+              upgrade [version]           Upgrade jpm to the latest release (--check only reports)
+
             Any other command runs an extension: `jpm format` runs `jpm-format`.
             Global options: -v/--verbose, --offline
             """;
@@ -157,6 +160,7 @@ public final class Main {
         return switch (cmd) {
             case "help" -> { System.out.print(HELP.formatted(VERSION)); yield 0; }
             case "version" -> { System.out.println("jpm " + VERSION); yield 0; }
+            case "upgrade", "self-update" -> Upgrade.run(args);
             case "init" -> c.init(args);
             case "add" -> c.add(args);
             case "remove", "rm" -> c.remove(args);

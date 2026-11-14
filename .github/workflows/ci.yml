@@ -158,6 +158,15 @@ jobs:
             (cd "$home/proj" && env -u JPM_HOME HOME="$home" bash -ic 'jvm current' | grep -q 'temurin-17')
             (cd "$home" && env -u JPM_HOME HOME="$home" bash -ic 'jvm use 11 && java -version' 2>&1 | tee v.txt && grep -q 'version "11' v.txt)
             (cd "$home/proj" && env -u JPM_HOME HOME="$home" bash -ic 'java -version' 2>&1 | grep -q 'version "17')
+            # jpm upgrade: a release that is newer gets installed in place, the same version is a no-op
+            v=$("$home/.jpm/bin/jpm" --version | cut -d' ' -f2)
+            echo "$v" > "$rel/VERSION"
+            env -u JPM_HOME HOME="$home" JPM_INSTALL_BASE="file://$rel" "$home/.jpm/bin/jpm" upgrade 2>&1 | grep -q "already the latest"
+            echo "99.0.0" > "$rel/VERSION"
+            env -u JPM_HOME HOME="$home" JPM_INSTALL_BASE="file://$rel" "$home/.jpm/bin/jpm" upgrade --check 2>&1 | grep -q "99.0.0 is available"
+            env -u JPM_HOME HOME="$home" JPM_INSTALL_BASE="file://$rel" "$home/.jpm/bin/jpm" upgrade 2>&1 | tee up.txt
+            grep -q "Upgraded" up.txt
+            test -L "$home/.jpm/bin/java" && "$home/.jpm/bin/jpm" --version
           fi
 
       - name: Test install.ps1 against this build
@@ -180,6 +189,14 @@ jobs:
           Pop-Location
           Write-Host $v
           if ($v -notmatch 'version "17') { throw "the java shim did not use the project's JDK" }
+          # jpm upgrade replaces the running jpm.exe and re-links the shims
+          Set-Content (Join-Path $env:RUNNER_TEMP 'release\VERSION') '99.0.0'
+          & (Join-Path $env:JPM_HOME 'bin\jpm.exe') upgrade
+          if ($LASTEXITCODE -ne 0) { throw "jpm upgrade failed" }
+          Push-Location $proj
+          $v = & (Join-Path $env:JPM_HOME 'bin\java.exe') -version 2>&1 | Out-String
+          Pop-Location
+          if ($v -notmatch 'version "17') { throw "the java shim broke after jpm upgrade" }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -220,6 +237,8 @@ jobs:
             done
           done
           cp install.sh install.ps1 release/
+          # `jpm upgrade` reads the latest version from this file
+          printf '%s\n' "$GITHUB_REF_NAME" > release/VERSION
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish

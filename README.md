@@ -24,6 +24,9 @@ the script to update is safe. Set `JPM_NO_MODIFY_PATH=1` to skip it. Releases ar
 (x64) when a version tag such as `0.3.0` is pushed (no `v` prefix); the tag must match the version in
 `project.jsonc`. `JPM_VERSION=0.3.0` makes the scripts install that version instead of the latest.
 
+`jpm upgrade` updates jpm to the latest release the same way (checksum-verified, in place);
+`jpm upgrade --check` only reports, and `jpm upgrade 0.3.0` installs a given version.
+
 ## Getting started
 
 ```sh
@@ -62,6 +65,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
 | `run <script> [args]` | Run a script from `scripts` (no shorthand) |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
+| `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports) |
 | `java list [--available [vendor]]` | Installed JDKs (`*` marks this project's), or what can be installed |
 | `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
 | `java use <java>` | Set `"java"` in the manifest, installing it if needed |
