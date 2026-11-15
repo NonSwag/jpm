@@ -20,9 +20,17 @@ public final class Graph {
     public enum Kind { MAVEN, GIT, LOCAL }
 
     /** An edge to another package. {@code runtimeOnly} edges are left off compile classpaths. */
-    public record Edge(String target, boolean runtimeOnly, Set<String> exclusions) {
+    /**
+     * A dependency. {@code runtimeOnly}: on the runtime classpath only. {@code compileOnly}: on the compile
+     * classpath only, provided at run time by the platform (a library's compileOnlyApi dependencies).
+     */
+    public record Edge(String target, boolean runtimeOnly, Set<String> exclusions, boolean compileOnly) {
+        public Edge(String target, boolean runtimeOnly, Set<String> exclusions) {
+            this(target, runtimeOnly, exclusions, false);
+        }
+
         public String encode() {
-            StringBuilder sb = new StringBuilder(runtimeOnly ? "runtime" : "compile");
+            StringBuilder sb = new StringBuilder(compileOnly ? "provided" : runtimeOnly ? "runtime" : "compile");
             for (String e : new TreeSet<>(exclusions)) sb.append(" !").append(e);
             return sb.toString();
         }
@@ -31,7 +39,7 @@ public final class Graph {
             String[] parts = s.trim().split("\\s+");
             Set<String> ex = new LinkedHashSet<>();
             for (int i = 1; i < parts.length; i++) if (parts[i].startsWith("!")) ex.add(parts[i].substring(1));
-            return new Edge(target, parts[0].equals("runtime"), ex);
+            return new Edge(target, parts[0].equals("runtime"), ex, parts[0].equals("provided"));
         }
     }
 
@@ -118,7 +126,7 @@ public final class Graph {
         LinkedHashSet<String> order = new LinkedHashSet<>();
         Deque<Object[]> queue = new ArrayDeque<>();
         for (Edge e : roots) {
-            if (compileOnly && e.runtimeOnly) continue;
+            if (compileOnly ? e.runtimeOnly : e.compileOnly) continue;
             queue.add(new Object[]{e.target, new LinkedHashSet<>(e.exclusions)});
         }
         while (!queue.isEmpty()) {
@@ -136,7 +144,8 @@ public final class Graph {
             Pkg p = pkgs.get(id);
             if (p == null) continue;
             for (Edge e : p.deps.values()) {
-                if (compileOnly && e.runtimeOnly) continue;
+                // the compile classpath skips run-time-only edges, every other classpath compile-only ones
+                if (compileOnly ? e.runtimeOnly : e.compileOnly) continue;
                 if (excluded(e.target, ex)) continue;
                 Set<String> next = new LinkedHashSet<>(ex);
                 next.addAll(e.exclusions);

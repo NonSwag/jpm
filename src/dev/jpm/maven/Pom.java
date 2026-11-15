@@ -40,6 +40,8 @@ public final class Pom {
     public String relocation;
     /** The raw POM elements: this POM first, then its parents. */
     public final List<Element> chain = new ArrayList<>();
+    /** True if Gradle published this POM next to Gradle Module Metadata (a .module file). */
+    public boolean gradleMetadata;
     /** Local file this POM was read from (null for POMs from a repository). */
     public Path file;
     /** Raw explicit properties of this POM and its parents (no built-ins), for importers. */
@@ -76,7 +78,9 @@ public final class Pom {
 
         private Pom build(String group, String artifact, String version, Set<String> stack) {
             Path file = repo.require(group, artifact, version, null, "pom");
-            return buildFrom(parseXml(file), null, group, artifact, version, stack);
+            Pom p = buildFrom(parseXml(file), null, group, artifact, version, stack);
+            p.gradleMetadata = dev.jpm.util.Fs.read(file).contains("published-with-gradle-metadata");
+            return p;
         }
 
         private Pom parentOf(Element parentEl, Path localFile, Set<String> stack) {

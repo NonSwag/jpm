@@ -221,7 +221,10 @@ both: every hard constraint must hold — anything declared in a manifest, and a
 among the versions that satisfy them the highest wins. Plain versions inside POMs are soft. Locked
 versions are kept while they still satisfy the constraints, so editing one dependency does not move
 others. POMs are read with parent inheritance, property interpolation, `dependencyManagement`, imported
-BOMs, exclusions, optional/provided/test scopes and relocation.
+BOMs, exclusions, optional/provided/test scopes and relocation. For libraries published by Gradle, the
+Gradle Module Metadata next to the POM decides what is needed when: `compileOnlyApi` dependencies (which
+the POM lists as `compile`) are on the compile classpath only, never at run time or in bundles, and
+`implementation` and `runtimeOnly` dependencies are on the runtime classpath only.
 
 **Git dependencies** go through the system `git` (so SSH keys and credential helpers work), into bare
 mirrors under `~/.jpm/git`. Versions are ranges in any of the syntaxes above matched against tags,

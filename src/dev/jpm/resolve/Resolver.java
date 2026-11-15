@@ -49,7 +49,11 @@ public final class Resolver {
 
     private record Selected(String version, String commit, String tag) {}
 
-    private record EdgeReq(String target, Graph.Kind kind, String spec, boolean runtimeOnly, Set<String> exclusions) {}
+    private record EdgeReq(String target, Graph.Kind kind, String spec, boolean runtimeOnly, Set<String> exclusions, boolean compileOnly) {
+        EdgeReq(String target, Graph.Kind kind, String spec, boolean runtimeOnly, Set<String> exclusions) {
+            this(target, kind, spec, runtimeOnly, exclusions, false);
+        }
+    }
 
     private record Expanded(List<EdgeReq> edges, boolean hasJar, Boolean isPublic) {}
 
@@ -213,7 +217,7 @@ public final class Resolver {
             p.hasJar = exp.hasJar;
             for (EdgeReq e : exp.edges) {
                 if (!requests.containsKey(e.target)) continue;
-                p.deps.put(e.target, new Graph.Edge(e.target, e.runtimeOnly, e.exclusions));
+                p.deps.put(e.target, new Graph.Edge(e.target, e.runtimeOnly, e.exclusions, e.compileOnly));
             }
             g.put(p);
         }
@@ -512,6 +516,12 @@ public final class Resolver {
                 return new Expanded(edges, false, null);
             }
         }
+        // Gradle's module metadata knows what a POM cannot: compile-time-only (compileOnlyApi) dependencies
+        dev.jpm.maven.GradleMetadata meta = null;
+        if (pom.gradleMetadata) {
+            java.nio.file.Path module = repo.fetch(ga[0], ga[1], version, null, "module");
+            if (module != null) meta = dev.jpm.maven.GradleMetadata.read(module);
+        }
         for (Pom.Dep d : pom.dependencies) {
             String scope = d.scope() == null ? "compile" : d.scope();
             if (!scope.equals("compile") && !scope.equals("runtime")) continue;
@@ -523,7 +533,12 @@ public final class Resolver {
                 continue;
             }
             String target = d.key() + (d.classifier() != null && !d.classifier().isEmpty() ? ":" + d.classifier() : "");
-            edges.add(new EdgeReq(target, Graph.Kind.MAVEN, d.version(), scope.equals("runtime"), d.exclusions()));
+            boolean runtimeOnly = scope.equals("runtime"), compileOnly = false;
+            if (meta != null) {
+                if (meta.compileOnly(d.key())) compileOnly = true;
+                else if (meta.runtimeOnly(d.key())) runtimeOnly = true;
+            }
+            edges.add(new EdgeReq(target, Graph.Kind.MAVEN, d.version(), runtimeOnly && !compileOnly, d.exclusions(), compileOnly));
         }
         return new Expanded(edges, !"pom".equals(pom.packaging), null);
     }
