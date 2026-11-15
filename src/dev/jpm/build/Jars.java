@@ -83,6 +83,103 @@ public final class Jars {
         }
     }
 
+    /**
+     * Merges jars and class directories into one flat jar, the way shadow jars are made: the first copy of
+     * a file wins, except service files (META-INF/services/*), whose lines are joined. Their manifests,
+     * signatures (which no longer match) and module descriptors (the merged jar is not those modules) are
+     * left out. Entries are written in name order with fixed times, so the same inputs give the same jar.
+     * Returns how many entries were written.
+     */
+    public static int merge(Path jar, List<Path> inputs, Map<String, String> attrs) {
+        Map<String, byte[]> entries = new TreeMap<>();
+        Map<String, java.util.LinkedHashSet<String>> services = new TreeMap<>();
+        boolean first = true;
+        for (Path in : inputs) {
+            boolean own = first;
+            first = false;
+            forEachEntry(in, (name, bytes) -> {
+                if (name.endsWith("/") || name.equals("META-INF/MANIFEST.MF")) return;
+                String upper = name.toUpperCase(java.util.Locale.ROOT);
+                if (upper.startsWith("META-INF/") && !upper.substring(9).contains("/")
+                        && (upper.endsWith(".SF") || upper.endsWith(".RSA") || upper.endsWith(".DSA") || upper.endsWith(".EC"))) return;
+                if (!own && (name.equals("module-info.class") || name.endsWith("/module-info.class"))) return;
+                if (name.startsWith("META-INF/services/") && name.indexOf('/', 18) < 0) {
+                    java.util.LinkedHashSet<String> lines = services.computeIfAbsent(name, k -> new java.util.LinkedHashSet<>());
+                    for (String line : new String(bytes, java.nio.charset.StandardCharsets.UTF_8).split("\r?\n")) {
+                        String t = line.strip();
+                        if (!t.isEmpty() && !t.startsWith("#")) lines.add(t);
+                    }
+                    return;
+                }
+                entries.putIfAbsent(name, bytes);
+            });
+        }
+        for (Map.Entry<String, java.util.LinkedHashSet<String>> e : services.entrySet()) {
+            entries.put(e.getKey(), (String.join("\n", e.getValue()) + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        Fs.mkdirs(jar.getParent());
+        Path tmp = jar.resolveSibling(jar.getFileName() + ".tmp");
+        try (OutputStream os = Files.newOutputStream(tmp); JarOutputStream out = new JarOutputStream(os)) {
+            java.util.jar.Manifest mf = new java.util.jar.Manifest();
+            mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+            mf.getMainAttributes().putValue("Created-By", "jpm");
+            for (Map.Entry<String, String> e : attrs.entrySet()) mf.getMainAttributes().putValue(e.getKey(), e.getValue());
+            JarEntry me = new JarEntry("META-INF/MANIFEST.MF");
+            me.setTime(EPOCH);
+            out.putNextEntry(me);
+            mf.write(out);
+            out.closeEntry();
+            Set<String> dirsWritten = new java.util.HashSet<>();
+            dirsWritten.add("META-INF/");
+            for (Map.Entry<String, byte[]> e : entries.entrySet()) {
+                String name = e.getKey();
+                for (int i = name.indexOf('/'); i >= 0; i = name.indexOf('/', i + 1)) {
+                    String dir = name.substring(0, i + 1);
+                    if (dirsWritten.add(dir)) {
+                        JarEntry de = new JarEntry(dir);
+                        de.setTime(EPOCH);
+                        out.putNextEntry(de);
+                        out.closeEntry();
+                    }
+                }
+                JarEntry je = new JarEntry(name);
+                je.setTime(EPOCH);
+                out.putNextEntry(je);
+                out.write(e.getValue());
+                out.closeEntry();
+            }
+        } catch (IOException e) {
+            throw new JpmException("Could not write " + jar + ": " + e.getMessage());
+        }
+        try {
+            Files.move(tmp, jar, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new JpmException("Could not write " + jar + ": " + e.getMessage());
+        }
+        return entries.size();
+    }
+
+    private static void forEachEntry(Path in, java.util.function.BiConsumer<String, byte[]> each) {
+        try {
+            if (Files.isDirectory(in)) {
+                for (Path f : Fs.files(in, null)) each.accept(Fs.slash(in.relativize(f)), Files.readAllBytes(f));
+                return;
+            }
+            try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(in.toFile())) {
+                var en = zf.entries();
+                while (en.hasMoreElements()) {
+                    java.util.zip.ZipEntry ze = en.nextElement();
+                    if (ze.isDirectory()) continue;
+                    try (java.io.InputStream is = zf.getInputStream(ze)) {
+                        each.accept(ze.getName(), is.readAllBytes());
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new JpmException("Could not read " + in + ": " + e.getMessage());
+        }
+    }
+
     /** Copies a jar, dropping entries that match {@code drop} and adding files from {@code overlay}. */
     public static void rewrite(Path in, Path outJar, Predicate<String> drop, Path overlay) {
         Fs.mkdirs(outJar.getParent());

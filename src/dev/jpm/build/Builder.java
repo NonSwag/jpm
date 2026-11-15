@@ -357,6 +357,36 @@ public final class Builder {
     }
 
     /**
+     * Builds {@code dist/<name>-<version>-bundle.jar} as one flat jar: the module's classes and resources with
+     * those of every runtime dependency merged in (dev dependencies, which the platform provides, stay out).
+     * This is what plugins for platforms that load jars themselves (Paper, Velocity, ...) need, and what a
+     * module without a main bundles to.
+     */
+    public Path flatBundle(Project.Module m) {
+        Path appJar = jar(m);
+        List<Path> inputs = new ArrayList<>();
+        inputs.add(appJar);
+        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), false)) inputs.addAll(bundleJars(id, m));
+        inputs = Compiler.distinct(inputs);
+        Map<String, String> attrs = new LinkedHashMap<>();
+        if (!m.manifest.mains.isEmpty()) attrs.put("Main-Class", m.manifest.mains.getOrDefault("main", m.manifest.mains.values().iterator().next()));
+        attrs.put("Implementation-Title", m.name());
+        attrs.put("Implementation-Version", m.version());
+        Path out = m.dir.resolve("dist").resolve(m.name() + "-" + m.version() + "-bundle.jar");
+        Hash key = new Hash().add("flat-v1").add(attrs.toString());
+        for (Path in : inputs) key.add(in.getFileName().toString()).add(Files.isDirectory(in) ? treeKey(List.of(in)) : Hash.sha256(in));
+        Path stamp = m.cacheDir().resolve("bundle.key");
+        if (Files.exists(out) && Files.exists(stamp) && Fs.read(stamp).equals(key.hex())) {
+            Log.step("Up to date", m.dir.relativize(out) + Log.dim(" (" + (inputs.size() - 1) + " dependencies merged)"));
+            return out;
+        }
+        int entries = Jars.merge(out, inputs, attrs);
+        Fs.write(stamp, key.hex());
+        Log.step("Bundled", m.dir.relativize(out) + Log.dim(" (flat: " + (inputs.size() - 1) + " dependencies merged, " + entries + " files)"));
+        return out;
+    }
+
+    /**
      * Builds {@code dist/<name>-<version>-bundle.jar}: the app and its dependencies as nested jars, with each
      * internal implementation module (and the dependencies only it uses) in its own child-first class loader.
      * No shading; runs with {@code java -jar}.

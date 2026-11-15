@@ -504,6 +504,7 @@ final class Commands {
         boolean release = flag(args, "--release");
         boolean nativeImage = flag(args, "--native");
         boolean bundleFlag = flag(args, "--bundle");
+        boolean flat = flag(args, "--flat");
         boolean frozen = flag(args, "--frozen");
         String profile = option(args, "--profile");
         if (release && profile == null) profile = "release";
@@ -517,9 +518,10 @@ final class Commands {
         for (Project.Module m : mods) {
             Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
             b.jar(m);
-            if (bundleFlag || m.manifest.packaging.equals("bundle")) {
-                if (!m.manifest.mains.isEmpty()) b.bundle(m);
-                else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to bundle");
+            if (bundleFlag || flat || m.manifest.packaging.equals("bundle")) {
+                // a runnable jar-in-jar for apps; one flat jar for modules without a main (plugins) or with --flat
+                if (flat || m.manifest.mains.isEmpty()) b.flatBundle(m);
+                else b.bundle(m);
             }
             if (nativeImage) {
                 if (!m.manifest.mains.isEmpty()) b.nativeImage(m, null);

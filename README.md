@@ -95,7 +95,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
 | `java use <java>` | Set `"java"` in the manifest, installing it if needed |
 | `java current` | Which JDK `java` runs here, and why. `jpm java …` and `jvm …` are the same commands |
-| `build --bundle` | Also build a runnable jar-in-jar bundle with isolated modules (`"package": "bundle"` makes it the default) |
+| `build --bundle` | Also build `dist/<name>-<version>-bundle.jar` with the runtime dependencies: a runnable jar-in-jar with isolated modules for a module with a `main`, one flat jar (like a shadow jar) for one without, such as a Paper or Velocity plugin; `--flat` makes it flat either way. `"package": "bundle"` makes it the default |
 | `build --native` | Also build a native executable of `main` with GraalVM into `dist/` |
 | `start --trace` | Run under the native-image tracing agent, recording configuration for native builds |
 | `<anything else>` | Runs extension `jpm-<name>` from `~/.jpm/bin` or `PATH`; install with `jpm add -g <dep>` |
@@ -290,7 +290,12 @@ and runs as a named module, with nothing to configure:
 
 ## Bundles (jar-in-jar isolation)
 
-`jpm build --bundle` (or `"package": "bundle"`) writes `dist/<name>-<version>-bundle.jar`, which runs
+For a module without a `main`, such as a plugin that a server loads, or with `jpm build --flat`, the bundle
+is one flat jar instead: the module's classes and resources with those of every runtime dependency merged
+in, the first copy of a file winning except service files (`META-INF/services/*`), which are joined. `dev`
+dependencies stay out, as the platform provides them. Nothing is relocated.
+
+For a module with a `main`, `jpm build --bundle` (or `"package": "bundle"`) writes `dist/<name>-<version>-bundle.jar`, which runs
 with `java -jar`. Nothing is shaded: the app and every dependency stay untouched jars inside it.
 
 - The app and its dependencies load in a **shared** class loader whose parent is the JDK.
