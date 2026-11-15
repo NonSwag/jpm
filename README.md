@@ -267,7 +267,11 @@ depend only on `public` modules; an `internal` module pulled in by a public one 
 classpath but never the compile classpath, and always comes from the same commit as the module that
 pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own.
 
-**Builds** call the selected JDK's `javac`. Per module, a hash of the classpath, define values, JDK and
+**Builds** call the selected JDK's `javac`, with `--release` only when it is newer than the module's
+target (so an API added later is a compile error, not a runtime crash). On a JDK of the target version
+`--release` changes nothing, and leaving it out lets `javacArgs` open the JDK's own modules, e.g.
+`["--add-exports", "jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED"]`, which javac refuses together
+with `--release`. Per module, a hash of the classpath, define values, JDK and
 flags decides whether to reuse output. Per file, changed sources are recompiled; when a class's public
 signature changes, every source that refers to it is recompiled too, and a change to a compile-time
 constant rebuilds the module (javac inlines constants without leaving a reference). Dev dependencies are

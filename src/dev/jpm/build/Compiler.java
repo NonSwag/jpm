@@ -214,8 +214,13 @@ public final class Compiler {
         Fs.mkdirs(tmp);
         List<String> args = new ArrayList<>();
         if (r.jdk.major() >= 9) {
-            args.add("--release");
-            args.add(Integer.toString(r.release));
+            // --release only matters when cross-compiling for an older Java. On a JDK of the target version it
+            // changes nothing (the same API and the same bytecode), and javac refuses it together with flags
+            // that open the JDK's own modules, such as --add-exports jdk.compiler/... in "javacArgs".
+            if (r.release < r.jdk.major()) {
+                args.add("--release");
+                args.add(Integer.toString(r.release));
+            }
         } else {
             args.add("-source");
             args.add(Integer.toString(r.release));
@@ -281,6 +286,11 @@ public final class Compiler {
             } catch (IOException ignored) {
             }
             System.err.println(out);
+            if (out.contains("not allowed with --release")) {
+                throw new JpmException(r.label + ": compilation failed: \"javacArgs\" opens a JDK module, which javac only"
+                        + " allows when the JDK is the target version; build with JDK " + r.release + " (" + r.jdk.id()
+                        + " targets " + r.release + " with --release)");
+            }
             throw new JpmException(r.label + ": compilation failed");
         }
         if (!out.isEmpty()) System.err.println(out);

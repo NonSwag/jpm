@@ -6,6 +6,7 @@ import dev.jpm.toolchain.Jdk;
 import dev.jpm.toolchain.Toolchain;
 import dev.jpm.util.Fs;
 import dev.jpm.util.JpmException;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -152,5 +153,52 @@ class BuildTest {
             System.setErr(err);
         }
         assertFalse(Files.exists(dir.resolve("classes/p/A.class")));
+    }
+
+    private static final List<String> EXPORT_JAVAC_TREE =
+            List.of("--add-exports", "jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED");
+
+    @Test
+    void exportsFromJdkModulesWorkWhenTheJdkIsTheTarget(@TempDir Path dir) {
+        // no --release on a JDK of the target version, so "javacArgs" can open the JDK's own modules
+        Jdk jdk = Toolchain.require(JavaSpec.any());
+        Fs.write(dir.resolve("src/p/A.java"), "package p; public class A { com.sun.tools.javac.tree.JCTree t; }");
+        assertTrue(Compiler.compile(new Compiler.Request("t", jdk, jdk.major(), List.of(dir.resolve("src")), List.of(), List.of(),
+                dir.resolve("classes"), dir.resolve("state.json"), EXPORT_JAVAC_TREE, "k")));
+        assertTrue(Files.exists(dir.resolve("classes/p/A.class")));
+    }
+
+    @Test
+    void crossCompilingStillChecksTheTargetApi(@TempDir Path dir) {
+        // targeting an older Java keeps --release: an API added later is a compile error, not a runtime crash
+        Jdk jdk = Toolchain.require(JavaSpec.any());
+        Assumptions.assumeTrue(jdk.major() >= 21, "needs JDK 21+ to target 17");
+        Fs.write(dir.resolve("src/p/A.java"), "package p; public class A { java.util.SequencedCollection<String> s; }");
+        Compiler.Request req = new Compiler.Request("t", jdk, 17, List.of(dir.resolve("src")), List.of(), List.of(),
+                dir.resolve("classes"), dir.resolve("state.json"), List.of(), "k");
+        quietly(() -> assertThrows(JpmException.class, () -> Compiler.compile(req)));
+    }
+
+    @Test
+    void crossCompilingWithExportsFromJdkModulesExplainsWhy(@TempDir Path dir) {
+        Jdk jdk = Toolchain.require(JavaSpec.any());
+        Assumptions.assumeTrue(jdk.major() >= 18, "needs a JDK newer than the target 17");
+        Fs.write(dir.resolve("src/p/A.java"), "package p; public class A { }");
+        Compiler.Request req = new Compiler.Request("t", jdk, 17, List.of(dir.resolve("src")), List.of(), List.of(),
+                dir.resolve("classes"), dir.resolve("state.json"), EXPORT_JAVAC_TREE, "k");
+        quietly(() -> {
+            JpmException e = assertThrows(JpmException.class, () -> Compiler.compile(req));
+            assertTrue(e.getMessage().contains("build with JDK 17"), e.getMessage());
+        });
+    }
+
+    private static void quietly(Runnable r) {
+        java.io.PrintStream err = System.err;
+        System.setErr(new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+        try {
+            r.run();
+        } finally {
+            System.setErr(err);
+        }
     }
 }
