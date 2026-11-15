@@ -12,8 +12,25 @@ permissions:
   contents: read
 
 jobs:
+  # Runs first: a release tag that does not match the version stops the run before anything is built.
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check that the tag matches the manifest version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version in project.jsonc. Set \"version\": \"$GITHUB_REF_NAME\" in project.jsonc, commit, and tag that commit."
+            exit 1
+          fi
+          echo "Releasing $version"
+
   build:
     name: ${{ matrix.name }}
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -236,14 +253,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Check that the tag matches the manifest version
-        run: |
-          version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
-          if [ "$GITHUB_REF_NAME" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match version $version in project.jsonc"
-            exit 1
-          fi
 
       - uses: actions/download-artifact@v4
         with:
