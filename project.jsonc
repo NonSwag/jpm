@@ -1,7 +1,7 @@
 // jpm builds itself: `./bootstrap.sh` once, then `bin/jpm build`, `bin/jpm test` and `bin/jpm build --native`.
 {
   "name": "jpm",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "java": "21",
   "main": "dev.jpm.cli.Main",
