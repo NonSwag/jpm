@@ -96,6 +96,39 @@ class GradleMetadataTest {
         assertFalse(runtimeTool.contains("annotations-26.1.0.jar"));
     }
 
+    /** jpm-publish writes "api" dev dependencies as provided in the POM, and compile-only in the .module. */
+    @Test
+    void providedDependenciesTheModuleListsForCompilingArePassedOn(@TempDir Path tmp) throws IOException {
+        System.setProperty("jpm.home", tmp.resolve("home").toString());
+        Path repo = tmp.resolve("repo");
+        publish(repo, "org.jspecify", "jspecify", "1.0.0", "", null, "org/jspecify/Nullable.class");
+        publish(repo, "org.example", "hidden", "1.0", "", null, "org/example/Hidden.class");
+        String module = """
+                { "formatVersion": "1.1", "variants": [
+                    { "name": "apiElements", "attributes": { "org.gradle.category": "library", "org.gradle.usage": "java-api" },
+                      "dependencies": [ { "group": "org.jspecify", "module": "jspecify", "version": { "requires": "1.0.0" } } ] },
+                    { "name": "runtimeElements", "attributes": { "org.gradle.category": "library", "org.gradle.usage": "java-runtime" } } ] }
+                """;
+        String provided = "<dependency><groupId>org.jspecify</groupId><artifactId>jspecify</artifactId><version>1.0.0</version>"
+                + "<scope>provided</scope></dependency><dependency><groupId>org.example</groupId><artifactId>hidden</artifactId>"
+                + "<version>1.0</version><scope>provided</scope></dependency>";
+        publish(repo, "com.acme", "lib", "1.0.0", provided, module, "com/acme/Lib.class");
+
+        Path project = tmp.resolve("app");
+        Fs.write(project.resolve("project.jsonc"), "{ \"name\": \"app\", \"version\": \"0.1.0\", \"java\": \"21\","
+                + " \"repositories\": [" + dev.jpm.json.Jsonc.quote(repo.toUri().toString()) + "],"
+                + " \"runtime\": { \"com.acme:lib\": \"1.0.0\" } }");
+        Fs.write(project.resolve("src/a/App.java"), "package a; public class App {}");
+        Project p = Project.load(project);
+        MavenRepo mr = new MavenRepo(p.root.repositories);
+        Graph g = Install.run(p, mr, new Install.Options(false, true, Set.of(), true));
+        assertTrue(g.get("com.acme:lib").deps.get("org.jspecify:jspecify").compileOnly());
+        assertFalse(g.get("com.acme:lib").deps.containsKey("org.example:hidden"), "other provided dependencies stay out");
+        var roots = Resolver.rootEdges(p.modules.get(0), dev.jpm.Manifest.Scope.RUNTIME);
+        assertTrue(g.closure(roots, Graph.Walk.COMPILE).contains("org.jspecify:jspecify"));
+        assertFalse(g.closure(roots, Graph.Walk.RUNTIME).contains("org.jspecify:jspecify"));
+    }
+
     @Test
     void compileOnlyApiDependenciesStayOutAtRunTime(@TempDir Path tmp) throws IOException {
         System.setProperty("jpm.home", tmp.resolve("home").toString());

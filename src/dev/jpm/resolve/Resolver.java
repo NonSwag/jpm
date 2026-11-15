@@ -530,7 +530,10 @@ public final class Resolver {
         }
         for (Pom.Dep d : pom.dependencies) {
             String scope = d.scope() == null ? "compile" : d.scope();
-            if (!scope.equals("compile") && !scope.equals("runtime")) continue;
+            // provided is not passed on, except where the .module says consumers compile against it (jpm-publish
+            // writes "api" dev dependencies like that; Gradle writes compileOnlyApi as compile scope)
+            boolean providedApi = scope.equals("provided") && meta != null && meta.compileOnly(d.key());
+            if (!scope.equals("compile") && !scope.equals("runtime") && !providedApi) continue;
             if (d.optional()) continue;
             if (d.type() != null && !d.type().equals("jar") && !d.type().equals("bundle")) continue;
             if (d.group() == null || d.artifact() == null || d.group().contains("${") || d.artifact().contains("${")) continue;
