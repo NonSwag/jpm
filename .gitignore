@@ -2,3 +2,5 @@
 dist/
 .env.local
 .idea
+# written when the fixtures are loaded (e.g. by the IntelliJ plugin); CI resolves them afresh
+fixtures/**/project.lock
