@@ -1,10 +1,9 @@
 name: CI
 
 on:
+  # Releases are not started by tags: CI creates the tag when the version changes (see the version job).
   push:
     branches: ["**"]
-    # releases are tagged with the plain version: 0.3.0
-    tags: ["[0-9]*.[0-9]*.[0-9]*"]
   pull_request:
   workflow_dispatch:
 
@@ -13,10 +12,9 @@ permissions:
 
 jobs:
   # Runs first and decides what this run publishes (outputs.kind):
-  #   release  a version tag was pushed, or the main branch has a version that has no tag yet
+  #   release  the main branch has a version that has no tag yet: CI tags this commit and releases it
   #   canary   any other push to the main branch: <version>-<commit>
   #   none     pull requests and other branches
-  # A pushed tag that does not match the version stops the run before anything is built.
   version:
     name: version
     runs-on: ubuntu-latest
@@ -31,31 +29,17 @@ jobs:
           python3 schema/check.py project.jsonc fixtures/bundle-demo/project.jsonc fixtures/bundle-demo/*/project.jsonc schema/examples/valid/*.jsonc
           python3 schema/check.py --expect-invalid schema/examples/invalid/*.jsonc
 
-      - name: Check that the tag matches the manifest version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
-          if [ "$GITHUB_REF_NAME" != "$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match version $version in project.jsonc. Set \"version\": \"$GITHUB_REF_NAME\" in project.jsonc, commit, and tag that commit."
-            exit 1
-          fi
-          echo "Releasing $version"
-
       - name: Decide between a release and a canary build
         id: decide
         run: |
           version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
           kind=none
-          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
-            kind=release
-          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = "refs/heads/${{ github.event.repository.default_branch }}" ]; then
-            # a new version (no tag for it yet) is released; plain versions only, not 1.0.0-rc1 and the like
-            if ! git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null && \
-               printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = "refs/heads/${{ github.event.repository.default_branch }}" ]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null; then
+              kind=canary
+            else
               kind=release
               echo "::notice::$version has no release yet: releasing it"
-            else
-              kind=canary
             fi
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
@@ -320,7 +304,9 @@ jobs:
             exit 0
           fi
           # creates the tag on this commit when the release was started by a version change
-          gh release create "$VERSION" release/* --target "$GITHUB_SHA" --title "jpm $VERSION" --generate-notes
+          # 1.0.0-rc1 and the like are prereleases: they never become releases/latest
+          pre=""; case "$VERSION" in *-*) pre="--prerelease" ;; esac
+          gh release create "$VERSION" release/* $pre --target "$GITHUB_SHA" --title "jpm $VERSION" --generate-notes
 
       - name: Point the canary release at it
         # the newest build is this release, so `jpm upgrade --canary` installs it too

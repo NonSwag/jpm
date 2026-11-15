@@ -46,10 +46,9 @@ stderr, after the version, so scripts reading the version are unaffected).
 
 **Releases** are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64). To release,
 change `"version"` in `project.jsonc` and push to the main branch: a version that has no release yet is
-tagged (plain, no `v` prefix) and released by that run, instead of a canary build. Pushing a tag such as
-`0.3.0` yourself works too; it must match the version in `project.jsonc`. Nothing is published unless
-every platform passes, and a version is never released twice. Versions like `1.0.0-rc1` are not released
-automatically; tag them to release them.
+tagged (plain, no `v` prefix) and released by that run, instead of a canary build. There is no tag to
+push by hand. Nothing is published unless every platform passes, and a version is never released twice.
+Versions like `1.0.0-rc1` become GitHub prereleases, which `jpm upgrade` and the install scripts skip.
 
 ## Getting started
 
