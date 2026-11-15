@@ -9,10 +9,9 @@ import dev.jpm.maven.Pom;
 import dev.jpm.util.Hash;
 import dev.jpm.util.JpmException;
 import dev.jpm.util.Log;
-import dev.jpm.version.MavenRange;
-import dev.jpm.version.NpmRange;
 import dev.jpm.version.Version;
 import dev.jpm.version.VersionSpec;
+import dev.jpm.version.VersionSpecs;
 
 import java.nio.file.Files;
 import java.util.ArrayDeque;
@@ -182,7 +181,8 @@ public final class Resolver {
                 for (EdgeReq e : exp.edges) {
                     if (Graph.excluded(e.target, ex)) continue;
                     kinds.putIfAbsent(e.target, e.kind);
-                    boolean hard = e.kind == Graph.Kind.GIT || MavenRange.isRange(e.spec);
+                    // a bare version from a POM is a preference; ranges in any syntax are requirements
+                    boolean hard = e.kind == Graph.Kind.GIT || !VersionSpecs.isBareVersion(e.spec);
                     requests.computeIfAbsent(e.target, k -> new ArrayList<>()).add(new Request(e.spec, hard, false, id));
                     visitedFrom.computeIfAbsent(e.target, k -> new LinkedHashSet<>()).add(id);
                     Set<String> next = new LinkedHashSet<>(ex);
@@ -255,7 +255,7 @@ public final class Resolver {
 
     private static void validateSpec(Manifest.Dependency d) {
         try {
-            if (d.key().isMaven()) MavenRange.parse(d.spec());
+            if (d.key().isMaven()) VersionSpecs.parse(d.spec());
         } catch (IllegalArgumentException e) {
             throw new JpmException(d.key() + " (" + Manifest.FILE + " line " + d.line() + "): " + e.getMessage());
         }
@@ -279,7 +279,7 @@ public final class Resolver {
             if (r.spec == null || r.spec.isBlank()) continue;
             if (r.hard) {
                 try {
-                    hard.add(MavenRange.parse(r.spec));
+                    hard.add(VersionSpecs.parse(r.spec));
                 } catch (IllegalArgumentException e) {
                     throw new JpmException(id + " (required by " + r.from + "): " + e.getMessage());
                 }
@@ -298,15 +298,15 @@ public final class Resolver {
             return new Selected(pref.toString(), null, null);
         }
         if (maxSoft != null) return new Selected(maxSoft.toString(), null, null);
-        boolean allExact = hard.stream().allMatch(VersionSpec::isExact);
+        boolean allExact = hard.stream().allMatch(s -> s.exactVersion() != null);
         if (allExact) {
-            String first = hard.get(0).text().replaceAll("[\\[\\]]", "").trim();
-            Version v = Version.of(first);
-            if (satisfies(v, hard)) return new Selected(first, null, null);
+            Version v = hard.get(0).exactVersion();
+            if (satisfies(v, hard)) return new Selected(v.toString(), null, null);
         } else {
             String[] ga = id.split(":");
             List<Version> all = repo.versions(ga[0], ga[1]);
-            Optional<Version> best = new AllOf(hard).best(all);
+            // one requirement chooses by its own rules (latest.integration takes snapshots, !! a preferred version)
+            Optional<Version> best = hard.size() == 1 ? hard.get(0).best(all) : new AllOf(hard).best(all);
             if (best.isPresent()) return new Selected(best.get().toString(), null, null);
         }
         throw conflict(id, reqs);
@@ -335,7 +335,7 @@ public final class Resolver {
         GitRepo git = GitRepo.of(key);
         List<Selected> pins = new ArrayList<>();
         List<Request> pinReqs = new ArrayList<>();
-        List<NpmRange> ranges = new ArrayList<>();
+        List<VersionSpec> ranges = new ArrayList<>();
         // "@<commit>" ties a module to the commit of a sibling from the same repository. It only decides
         // when nothing else asks for the module; otherwise the sibling follows the other requests.
         boolean onlySiblingPins = reqs.stream().allMatch(r -> r.spec.trim().startsWith("@"));
@@ -350,14 +350,14 @@ public final class Resolver {
                         ? previous.get(id).commit : git.branchHead(s.substring(1));
                 pins.add(commitSelection(key, commit, null));
                 pinReqs.add(r);
-            } else if (HEX.matcher(s).matches() && !NpmRange.looksLikeRange(s)) {
+            } else if (HEX.matcher(s).matches() && !VersionSpecs.looksLikeSpec(s)) {
                 String full = git.resolveCommit(s);
                 if (full == null) throw new JpmException(id + ": commit " + s + " not found");
                 pins.add(commitSelection(key, full, null));
                 pinReqs.add(r);
-            } else if (NpmRange.looksLikeRange(s)) {
+            } else if (VersionSpecs.looksLikeSpec(s)) {
                 try {
-                    ranges.add(NpmRange.parse(s));
+                    ranges.add(VersionSpecs.parse(s, true));
                 } catch (IllegalArgumentException e) {
                     throw new JpmException(id + " (required by " + r.from + "): " + e.getMessage());
                 }
@@ -387,7 +387,7 @@ public final class Resolver {
                     break;
                 }
             }
-            for (NpmRange r : ranges) {
+            for (VersionSpec r : ranges) {
                 if (!r.matches(Version.of(stripBuild(chosen.version)))) {
                     throw conflict(id, reqs);
                 }
@@ -405,14 +405,14 @@ public final class Resolver {
             if (p.tag != null && tags.containsKey(p.tag) && tags.get(p.tag).equals(p.commit)) {
                 Version v = Version.of(p.version);
                 boolean ok = true;
-                for (NpmRange r : ranges) ok &= r.matches(v);
+                for (VersionSpec r : ranges) ok &= r.matches(v);
                 if (ok) return new Selected(p.version, p.commit, p.tag);
             }
         }
         Version best = null;
         for (Version v : byVersion.keySet()) {
             boolean ok = true;
-            for (NpmRange r : ranges) {
+            for (VersionSpec r : ranges) {
                 if (!r.matches(v) || (v.isPreRelease() && !r.text().contains("-"))) { ok = false; break; }
             }
             if (ok && (best == null || v.compareTo(best) > 0)) best = v;

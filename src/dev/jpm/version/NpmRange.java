@@ -4,13 +4,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * npm-style semver range used for Git tags: {@code ^1.2}, {@code ~1.2.3}, {@code 1.x}, {@code *},
- * {@code >=1.0 <2.0}, {@code 1.2.3}, {@code 1.0 - 2.0} and {@code ||} alternatives.
+ * npm-style range: {@code ^1.2}, {@code ~1.2.3}, {@code ~1}, {@code 1.x}, {@code 1.2.*}, {@code *},
+ * {@code >=0.1}, {@code >1.0 <=2.0}, {@code =1.2.3}, {@code 1.2.3}, {@code 1.0 - 2.0} and {@code ||}
+ * alternatives.
+ *
+ * <p>Versions are compared the way {@link Version} orders them, so Maven versions with qualifiers work too:
+ * {@code ^33} matches {@code 33.4.0-jre}. As in npm, a pre-release (alpha, beta, milestone, rc, snapshot)
+ * only matches when a comparator in the same alternative names a pre-release of the same version, as in
+ * {@code ^1.3.0-beta}.
  */
 public final class NpmRange implements VersionSpec {
-    private record Cmp(String op, int[] v, String pre) {
-        boolean matches(int[] x) {
-            int c = compare(x, v);
+    /** One comparison; {@code pre} is the comparator's own pre-release part, or null. */
+    private record Cmp(String op, Version v, String pre) {
+        boolean matches(Version x) {
+            int c = x.compareTo(v);
             return switch (op) {
                 case ">" -> c > 0;
                 case ">=" -> c >= 0;
@@ -43,172 +50,172 @@ public final class NpmRange implements VersionSpec {
         String s = text.trim();
         if (s.equals("latest") || s.isEmpty()) s = "*";
         List<List<Cmp>> alts = new ArrayList<>();
-        boolean exact = false;
         for (String alt : s.split("\\|\\|")) {
             alt = alt.trim();
             List<Cmp> set = new ArrayList<>();
             String[] hy = alt.split("\\s+-\\s+");
             if (hy.length == 2) {
-                set.add(new Cmp(">=", fill(partial(hy[0])), null));
-                int[] hi = partial(hy[1]);
-                set.add(upperFromPartial(hi));
+                Part lo = Part.of(hy[0]);
+                set.add(new Cmp(">=", lo.filled(), lo.pre));
+                set.add(upperFromPartial(Part.of(hy[1])));
             } else {
-                for (String tok : alt.split("\\s+")) {
+                // ">= 1.0" is ">=1.0": join operators with the version after them
+                for (String tok : alt.replaceAll("([<>=^~]+)\\s+", "$1").split("\\s+")) {
                     if (tok.isEmpty()) continue;
-                    set.addAll(comparators(tok));
+                    set.addAll(comparators(tok, text));
                 }
             }
-            if (set.isEmpty()) set.add(new Cmp(">=", new int[]{0, 0, 0}, null));
+            if (set.isEmpty()) set.add(new Cmp(">=", Version.of("0"), null));
             alts.add(set);
         }
-        if (alts.size() == 1 && alts.get(0).size() == 1 && alts.get(0).get(0).op.equals("=")) exact = true;
+        boolean exact = alts.size() == 1 && alts.get(0).size() == 1 && alts.get(0).get(0).op.equals("=");
         return new NpmRange(text, alts, exact);
     }
 
-    private static Cmp upperFromPartial(int[] p) {
-        // "1.2 - 2.3" means <2.4.0; "1.2 - 2.3.4" means <=2.3.4
-        if (p[2] >= 0) return new Cmp("<=", fill(p), null);
-        if (p[1] >= 0) return new Cmp("<", new int[]{p[0], p[1] + 1, 0}, null);
-        return new Cmp("<", new int[]{p[0] + 1, 0, 0}, null);
+    /** A partial version: [major, minor, patch] with -1 for parts left out or written as x or *. */
+    private record Part(int[] n, String pre) {
+        static Part of(String s) {
+            s = s.trim();
+            if (s.startsWith("v") || s.startsWith("V")) s = s.substring(1);
+            String pre = null;
+            int dash = s.indexOf('-');
+            if (dash >= 0) {
+                pre = s.substring(dash + 1);
+                s = s.substring(0, dash);
+            }
+            int plus = s.indexOf('+');
+            if (plus >= 0) s = s.substring(0, plus);
+            int[] out = {-1, -1, -1};
+            if (s.isEmpty() || s.equals("*") || s.equalsIgnoreCase("x")) return new Part(out, pre);
+            String[] parts = s.split("\\.");
+            if (parts.length > 3) throw new IllegalArgumentException("Invalid version \"" + s + "\" in a range: at most major.minor.patch");
+            for (int i = 0; i < parts.length; i++) {
+                String p = parts[i];
+                if (p.equalsIgnoreCase("x") || p.equals("*")) break;
+                try {
+                    out[i] = Integer.parseInt(p);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("Invalid version \"" + s + "\" in a range");
+                }
+            }
+            return new Part(out, pre);
+        }
+
+        int major() { return n[0]; }
+        int minor() { return n[1]; }
+        int patch() { return n[2]; }
+
+        /** The lowest version this part stands for: 1.2 is 1.2.0, 1.2.0-beta stays as written. */
+        Version filled() {
+            return version(Math.max(n[0], 0), Math.max(n[1], 0), Math.max(n[2], 0), pre);
+        }
     }
 
-    private static List<Cmp> comparators(String tok) {
-        String op = "";
+    private static Version version(int major, int minor, int patch, String pre) {
+        return Version.of(major + "." + minor + "." + patch + (pre == null ? "" : "-" + pre));
+    }
+
+    /** The upper end of "a - b": "1.2 - 2.3" means <2.4.0, "1.2 - 2.3.4" means <=2.3.4. */
+    private static Cmp upperFromPartial(Part p) {
+        if (p.patch() >= 0) return new Cmp("<=", p.filled(), p.pre);
+        if (p.minor() >= 0) return new Cmp("<", version(p.major(), p.minor() + 1, 0, null), null);
+        if (p.major() >= 0) return new Cmp("<", version(p.major() + 1, 0, 0, null), null);
+        return new Cmp(">=", Version.of("0"), null);
+    }
+
+    private static List<Cmp> comparators(String tok, String text) {
         int i = 0;
         while (i < tok.length() && "<>=^~".indexOf(tok.charAt(i)) >= 0) i++;
-        op = tok.substring(0, i);
-        String ver = tok.substring(i);
-        if (ver.startsWith("v")) ver = ver.substring(1);
-        String pre = null;
-        int dash = ver.indexOf('-');
-        if (dash >= 0) { pre = ver.substring(dash + 1); ver = ver.substring(0, dash); }
-        int[] p = partial(ver);
+        String op = tok.substring(0, i);
+        Part p = Part.of(tok.substring(i));
         List<Cmp> out = new ArrayList<>();
         switch (op) {
             case "^" -> {
-                int[] lo = fill(p);
-                int[] hi;
-                if (p[0] > 0 || p[1] < 0) hi = new int[]{p[0] + 1, 0, 0};
-                else if (p[1] > 0 || p[2] < 0) hi = new int[]{0, p[1] + 1, 0};
-                else hi = new int[]{0, 0, p[2] + 1};
-                out.add(new Cmp(">=", lo, pre));
+                // the left-most non-zero part may not change: ^1.2.3 <2, ^0.2.3 <0.3, ^0.0.3 <0.0.4
+                Version hi;
+                if (p.major() < 0) {
+                    out.add(new Cmp(">=", Version.of("0"), null));
+                    return out;
+                } else if (p.major() > 0 || p.minor() < 0) hi = version(p.major() + 1, 0, 0, null);
+                else if (p.minor() > 0 || p.patch() < 0) hi = version(0, p.minor() + 1, 0, null);
+                else hi = version(0, 0, p.patch() + 1, null);
+                out.add(new Cmp(">=", p.filled(), p.pre));
                 out.add(new Cmp("<", hi, null));
             }
-            case "~" -> {
-                out.add(new Cmp(">=", fill(p), pre));
-                if (p[1] < 0) out.add(new Cmp("<", new int[]{p[0] + 1, 0, 0}, null));
-                else out.add(new Cmp("<", new int[]{p[0], p[1] + 1, 0}, null));
+            case "~", "~>" -> {
+                // ~1.2.3 and ~1.2 allow patch changes, ~1 minor changes
+                if (p.major() < 0) {
+                    out.add(new Cmp(">=", Version.of("0"), null));
+                    return out;
+                }
+                out.add(new Cmp(">=", p.filled(), p.pre));
+                if (p.minor() < 0) out.add(new Cmp("<", version(p.major() + 1, 0, 0, null), null));
+                else out.add(new Cmp("<", version(p.major(), p.minor() + 1, 0, null), null));
             }
             case "", "=" -> {
-                if (p[0] < 0) {
-                    out.add(new Cmp(">=", new int[]{0, 0, 0}, null));
-                } else if (p[1] < 0) {
-                    out.add(new Cmp(">=", new int[]{p[0], 0, 0}, null));
-                    out.add(new Cmp("<", new int[]{p[0] + 1, 0, 0}, null));
-                } else if (p[2] < 0) {
-                    out.add(new Cmp(">=", new int[]{p[0], p[1], 0}, null));
-                    out.add(new Cmp("<", new int[]{p[0], p[1] + 1, 0}, null));
+                if (p.major() < 0) {
+                    out.add(new Cmp(">=", Version.of("0"), null));
+                } else if (p.minor() < 0) {
+                    out.add(new Cmp(">=", version(p.major(), 0, 0, null), null));
+                    out.add(new Cmp("<", version(p.major() + 1, 0, 0, null), null));
+                } else if (p.patch() < 0) {
+                    out.add(new Cmp(">=", version(p.major(), p.minor(), 0, null), null));
+                    out.add(new Cmp("<", version(p.major(), p.minor() + 1, 0, null), null));
                 } else {
-                    out.add(new Cmp("=", p, pre));
+                    out.add(new Cmp("=", p.filled(), p.pre));
                 }
             }
-            case ">", ">=", "<", "<=" -> {
-                if (op.equals(">") && p[2] < 0) {
-                    // >1.2 means >=1.3.0
-                    int[] lo = p[1] < 0 ? new int[]{p[0] + 1, 0, 0} : new int[]{p[0], p[1] + 1, 0};
-                    out.add(new Cmp(">=", lo, null));
-                } else if (op.equals("<=") && p[2] < 0) {
-                    out.add(upperFromPartial(p));
-                } else {
-                    out.add(new Cmp(op, fill(p), pre));
-                }
+            case ">" -> {
+                // >1.2 means >=1.3.0, >1 means >=2.0.0
+                if (p.major() < 0) out.add(new Cmp("<", Version.of("0"), null)); // nothing is >*
+                else if (p.minor() < 0) out.add(new Cmp(">=", version(p.major() + 1, 0, 0, null), null));
+                else if (p.patch() < 0) out.add(new Cmp(">=", version(p.major(), p.minor() + 1, 0, null), null));
+                else out.add(new Cmp(">", p.filled(), p.pre));
             }
-            default -> throw new IllegalArgumentException("Invalid range operator \"" + op + "\"");
+            case ">=" -> out.add(new Cmp(">=", p.filled(), p.pre));
+            case "<" -> out.add(new Cmp("<", p.filled(), p.pre));
+            case "<=" -> {
+                if (p.patch() < 0) out.add(upperFromPartial(p));
+                else out.add(new Cmp("<=", p.filled(), p.pre));
+            }
+            default -> throw new IllegalArgumentException("Invalid range operator \"" + op + "\" in \"" + text + "\"");
         }
         return out;
-    }
-
-    /** Parses "1", "1.2", "1.2.3", "1.x", "*" into [major, minor, patch] with -1 for wildcards. */
-    private static int[] partial(String s) {
-        s = s.trim();
-        if (s.startsWith("v")) s = s.substring(1);
-        int[] out = {-1, -1, -1};
-        if (s.isEmpty() || s.equals("*")) return out;
-        String[] parts = s.split("\\.");
-        for (int i = 0; i < Math.min(3, parts.length); i++) {
-            String p = parts[i];
-            if (p.equals("x") || p.equals("X") || p.equals("*")) break;
-            try {
-                out[i] = Integer.parseInt(p);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("Invalid version \"" + s + "\"");
-            }
-        }
-        return out;
-    }
-
-    private static int[] fill(int[] p) {
-        return new int[]{Math.max(p[0], 0), Math.max(p[1], 0), Math.max(p[2], 0)};
-    }
-
-    private static int compare(int[] a, int[] b) {
-        for (int i = 0; i < 3; i++) {
-            int c = Integer.compare(a[i], b[i]);
-            if (c != 0) return c;
-        }
-        return 0;
-    }
-
-    /** Parses a tag version into [major, minor, patch] and a pre-release suffix, or null. */
-    private static Object[] semver(String v) {
-        if (v.startsWith("v")) v = v.substring(1);
-        int plus = v.indexOf('+');
-        if (plus >= 0) v = v.substring(0, plus);
-        String pre = null;
-        int dash = v.indexOf('-');
-        if (dash >= 0) { pre = v.substring(dash + 1); v = v.substring(0, dash); }
-        String[] parts = v.split("\\.");
-        if (parts.length == 0 || parts.length > 3) return null;
-        int[] out = {0, 0, 0};
-        for (int i = 0; i < parts.length; i++) {
-            try { out[i] = Integer.parseInt(parts[i]); } catch (NumberFormatException e) { return null; }
-        }
-        return new Object[]{out, pre};
     }
 
     @Override
     public boolean matches(Version version) {
-        Object[] sv = semver(version.toString());
-        if (sv == null) return false;
-        int[] x = (int[]) sv[0];
-        String pre = (String) sv[1];
+        boolean pre = version.isPreRelease();
         for (List<Cmp> set : alternatives) {
             boolean ok = true;
-            boolean preAllowed = pre == null;
             for (Cmp c : set) {
-                if (!c.matches(x)) {
-                    // pre-release only matches a comparator on the same [major,minor,patch]
-                    if (!(pre != null && c.pre != null && compare(x, c.v) == 0 && preCompare(pre, c.pre, c.op))) {
-                        ok = false;
-                        break;
-                    }
+                if (!c.matches(version)) {
+                    ok = false;
+                    break;
                 }
-                if (pre != null && c.pre != null && compare(x, c.v) == 0) preAllowed = true;
             }
-            if (ok && preAllowed) return true;
+            if (!ok) continue;
+            if (!pre) return true;
+            // a pre-release needs a comparator naming a pre-release of the same version
+            for (Cmp c : set) {
+                if (c.pre != null && sameRelease(version, c.v)) return true;
+            }
         }
         return false;
     }
 
-    private static boolean preCompare(String pre, String bound, String op) {
-        int c = Version.of("0-" + pre).compareTo(Version.of("0-" + bound));
-        return switch (op) {
-            case ">" -> c > 0;
-            case ">=" -> c >= 0;
-            case "<" -> c < 0;
-            case "<=" -> c <= 0;
-            default -> c == 0;
-        };
+    /** True if both versions have the same numeric part: 1.3.0-beta.2 and 1.3.0-beta. */
+    private static boolean sameRelease(Version a, Version b) {
+        return Version.of(numericPart(a.toString())).equals(Version.of(numericPart(b.toString())));
+    }
+
+    private static String numericPart(String v) {
+        if (v.startsWith("v")) v = v.substring(1);
+        int i = 0;
+        while (i < v.length() && (Character.isDigit(v.charAt(i)) || v.charAt(i) == '.')) i++;
+        String n = v.substring(0, i);
+        while (n.endsWith(".")) n = n.substring(0, n.length() - 1);
+        return n.isEmpty() ? "0" : n;
     }
 
     @Override
@@ -216,6 +223,9 @@ public final class NpmRange implements VersionSpec {
 
     @Override
     public boolean isExact() { return exact; }
+
+    @Override
+    public Version exactVersion() { return exact ? alternatives.get(0).get(0).v : null; }
 
     @Override
     public String toString() { return text; }

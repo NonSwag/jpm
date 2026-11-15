@@ -131,6 +131,25 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 }
 ```
 
+**Versions** can be written in Maven's, Gradle's or npm's syntax, for Maven and Git dependencies alike:
+
+| Syntax | Examples | Means |
+|---|---|---|
+| exact | `1.2.3`, `=1.2.3`, `1.2.3!!` | that version (for Git dependencies a bare `1.2` is npm's `1.2.x`) |
+| Maven range | `[1.0,2.0)`, `[1.5,)`, `(,1.0]`, `[1.0]`, `(,1.0],[1.2,)` | `[` `]` include the end, `(` `)` exclude it |
+| Gradle range | `]1.0,2.0[`, `[1.0,2.0[` | reversed brackets exclude the end |
+| Gradle prefix | `1.+`, `1.2.+`, `+` | every version starting with `1.`, `1.2.`, any version |
+| caret / tilde | `^1.2`, `^0.2.3`, `~1.2.3`, `~1` | compatible changes; `~` patch changes (minor for `~1`) |
+| comparisons | `>=0.1`, `>1.0 <=2.0`, `1.0 - 2.0` | combined with spaces; a hyphen gives both ends |
+| wildcards | `1.x`, `1.2.*`, `*` | any value in that position |
+| alternatives | `^1 \|\| ^2` | either range |
+| newest | `latest.release`, `RELEASE`, `latest.milestone`, `latest.integration`, `LATEST` | the newest release; with milestones; with snapshots too |
+| strict, preferring | `[1.0,2.0)!!1.5` | that range, 1.5 when it is published |
+
+Ranges compare versions the way Maven orders them, so qualifiers work: `^33` matches `33.4.8-jre`.
+Pre-releases (alpha, beta, milestone, rc) and snapshots are only chosen when the range names one, as in
+`^1.3.0-beta`, or asks for them (`latest.milestone`, `latest.integration`).
+
 A dependency is a version string, or an object with options:
 
 ```jsonc
@@ -205,8 +224,8 @@ others. POMs are read with parent inheritance, property interpolation, `dependen
 BOMs, exclusions, optional/provided/test scopes and relocation.
 
 **Git dependencies** go through the system `git` (so SSH keys and credential helpers work), into bare
-mirrors under `~/.jpm/git`. Versions are npm-style ranges matched against tags, exact tags, commits or
-`#branch`. A tag must match the version in that commit's manifest; untagged commits are versioned like
+mirrors under `~/.jpm/git`. Versions are ranges in any of the syntaxes above matched against tags,
+exact tags, commits or `#branch`. A tag must match the version in that commit's manifest; untagged commits are versioned like
 `1.3.0+a1b2c3d`. Git packages are built from source with the consuming project's resolved versions
 and cached in `~/.jpm/builds`, keyed by commit, patch, define values, classpath and JDK. A repository
 without a `project.jsonc` is imported from its `pom.xml` or Gradle build (see

@@ -13,6 +13,11 @@ public interface VersionSpec {
     /** True if only one version can match. */
     boolean isExact();
 
+    /** The one version an exact spec allows, or null. */
+    default Version exactVersion() {
+        return null;
+    }
+
     /** Highest matching version, preferring releases over pre-releases. */
     default Optional<Version> best(Collection<Version> candidates) {
         Version best = null;

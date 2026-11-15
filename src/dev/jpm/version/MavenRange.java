@@ -4,9 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Maven version range: {@code [1.0,2.0)}, {@code [1.5,)}, {@code (,1.0],[1.2,)}, {@code [1.0]}.
- * A bare version such as {@code 1.18.34} is treated as exact (the manifest only allows Maven-style
- * ranges, so a bare version means "this version").
+ * Maven version range: {@code [1.0,2.0)}, {@code [1.5,)}, {@code (,1.0],[1.2,)}, {@code [1.0]}, and
+ * Gradle's way of writing open ends with reversed brackets: {@code ]1.0,2.0[} is {@code (1.0,2.0)} and
+ * {@code [1.0,2.0[} is {@code [1.0,2.0)}. A bare version such as {@code 1.18.34} is exact. This is the
+ * syntax POMs use; {@link VersionSpecs} reads every syntax a manifest may use.
  */
 public final class MavenRange implements VersionSpec {
     private record Bound(Version lower, boolean lowerInclusive, Version upper, boolean upperInclusive) {
@@ -36,7 +37,7 @@ public final class MavenRange implements VersionSpec {
     public static MavenRange parse(String text) {
         String s = text.trim();
         if (s.isEmpty()) throw new IllegalArgumentException("Empty version");
-        if (s.charAt(0) != '[' && s.charAt(0) != '(') {
+        if (!isRange(s)) {
             if (s.contains(",") || s.contains(" ") || s.startsWith("^") || s.startsWith("~")) {
                 throw new IllegalArgumentException("Invalid Maven version \"" + text
                         + "\". Maven dependencies take an exact version or a Maven range like [1.0,2.0)");
@@ -48,9 +49,9 @@ public final class MavenRange implements VersionSpec {
         int i = 0;
         while (i < s.length()) {
             char open = s.charAt(i);
-            if (open != '[' && open != '(') throw new IllegalArgumentException("Invalid range \"" + text + "\"");
+            if (open != '[' && open != '(' && open != ']') throw new IllegalArgumentException("Invalid range \"" + text + "\"");
             int close = i + 1;
-            while (close < s.length() && s.charAt(close) != ']' && s.charAt(close) != ')') close++;
+            while (close < s.length() && s.charAt(close) != ']' && s.charAt(close) != ')' && s.charAt(close) != '[') close++;
             if (close >= s.length()) throw new IllegalArgumentException("Unclosed range \"" + text + "\"");
             String inner = s.substring(i + 1, close).trim();
             boolean li = open == '[';
@@ -75,7 +76,7 @@ public final class MavenRange implements VersionSpec {
     /** True if a POM version string is a range rather than a soft requirement. */
     public static boolean isRange(String s) {
         s = s.trim();
-        return s.startsWith("[") || s.startsWith("(");
+        return s.startsWith("[") || s.startsWith("(") || s.startsWith("]");
     }
 
     @Override
@@ -89,6 +90,9 @@ public final class MavenRange implements VersionSpec {
 
     @Override
     public boolean isExact() { return exact; }
+
+    @Override
+    public Version exactVersion() { return exact ? bounds.get(0).lower : null; }
 
     @Override
     public String toString() { return text; }

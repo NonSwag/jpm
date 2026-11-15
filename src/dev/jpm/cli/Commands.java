@@ -31,6 +31,7 @@ import dev.jpm.version.MavenRange;
 import dev.jpm.version.NpmRange;
 import dev.jpm.version.Version;
 import dev.jpm.version.VersionSpec;
+import dev.jpm.version.VersionSpecs;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -322,7 +323,7 @@ final class Commands {
                 String spec = d.spec != null ? d.spec : d.key.isWorkspace() ? "*" : latestSpec(repo, d.key);
                 if (d.key.isMaven()) {
                     try {
-                        MavenRange.parse(spec);
+                        VersionSpecs.parse(spec);
                     } catch (IllegalArgumentException e) {
                         throw new JpmException(e.getMessage());
                     }
@@ -428,19 +429,19 @@ final class Commands {
                 if (d.key().isMaven()) {
                     List<Version> all = c.repo.versions(d.key().group(), d.key().artifact());
                     latest = latestSpec(c.repo, d.key());
-                    Optional<Version> w = MavenRange.parse(d.spec()).best(all);
+                    Optional<Version> w = VersionSpecs.parse(d.spec()).best(all);
                     wanted = w.map(Version::toString).orElse("-");
                 } else {
                     String l = latestSpec(c.repo, d.key());
                     latest = l.startsWith("^") ? l.substring(1) : l;
-                    if (NpmRange.looksLikeRange(d.spec())) {
+                    if (VersionSpecs.looksLikeSpec(d.spec())) {
                         List<Version> vs = new ArrayList<>();
                         Map<String, String> tags = GitRepo.of(d.key()).tags();
                         for (String t : tags.keySet()) {
                             String v = tagVersion(d.key(), t, tags.keySet());
                             if (v != null) vs.add(Version.of(v));
                         }
-                        VersionSpec spec = NpmRange.parse(d.spec());
+                        VersionSpec spec = VersionSpecs.parse(d.spec(), true);
                         wanted = spec.best(vs).map(Version::toString).orElse("-");
                     } else {
                         wanted = pkg.version;
