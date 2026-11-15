@@ -16,8 +16,8 @@ jpm build && jpm test
 Install jpm (it adds `jpm`, `jvm` and the `java` shims to your PATH), or upgrade an existing install:
 
 ```sh
-curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh      # Linux, macOS
-irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/java-package-manager/jpm/releases/latest/download/install.sh | sh      # Linux, macOS
+irm https://github.com/java-package-manager/jpm/releases/latest/download/install.ps1 | iex           # Windows
 jpm upgrade                                                                               # already installed
 ```
 
@@ -238,7 +238,7 @@ Replace the Maven or Gradle setup with jpm. A GitHub Actions example:
 - uses: actions/checkout@v4
 - name: Install jpm
   run: |
-    curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh
+    curl -fsSL https://github.com/java-package-manager/jpm/releases/latest/download/install.sh | sh
     echo "$HOME/.jpm/bin" >> "$GITHUB_PATH"
 - run: jpm install --frozen     # fails if project.lock does not match project.jsonc
 - run: jpm test
@@ -251,10 +251,10 @@ No `setup-java` step is needed: jpm installs the project's JDK. Cache `~/.jpm/re
 ## Publishing
 
 Publishing to Maven repositories and Maven Central lives in the
-[jpm-publish](https://github.com/NonSwag/jpm-publish) extension:
+[jpm-publish](https://github.com/java-package-manager/jpm-publish) extension:
 
 ```sh
-jpm add -g github:NonSwag/jpm-publish
+jpm add -g github:java-package-manager/jpm-publish
 ```
 
 Move what `distributionManagement`, `maven-deploy-plugin`, `maven-gpg-plugin` or the Gradle
@@ -287,7 +287,7 @@ Once `jpm build`, `jpm test` and CI are green:
 2. delete `target/` or `build/` output folders, and ignore jpm's instead: `.cache/` and `dist/`;
 3. commit `project.jsonc`, `project.lock` and the new `.gitignore` entries.
 
-In IntelliJ IDEA, the [jpm plugin](https://github.com/NonSwag/jpm-intellij) opens the project from
+In IntelliJ IDEA, the [jpm plugin](https://github.com/java-package-manager/jpm-intellij) opens the project from
 `project.jsonc` (modules, dependencies with sources, the JDK) and can run the migration for you: it shows
 what `jpm import` would write before writing it. With other IDEs, keep the old build files while the IDE
 needs them to open the project, and update them by hand when dependencies change.

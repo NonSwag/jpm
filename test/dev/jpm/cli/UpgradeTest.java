@@ -31,7 +31,7 @@ class UpgradeTest {
         // Canary versions parse like any version; `jpm upgrade` compares a canary through releaseOf.
         assertTrue(dev.jpm.version.Version.of("0.5.0-3ff03ab").compareTo(dev.jpm.version.Version.of("0.4.0")) > 0);
         assertTrue(dev.jpm.version.Version.of("0.5.0-3ff03ab").compareTo(dev.jpm.version.Version.of("0.6.0")) < 0);
-        assertEquals("https://github.com/NonSwag/jpm/releases/download/canary", Upgrade.canaryBase());
+        assertEquals("https://github.com/java-package-manager/jpm/releases/download/canary", Upgrade.canaryBase());
     }
 
     @Test
@@ -57,7 +57,7 @@ class UpgradeTest {
 
     @Test
     void releaseUrlsUsePlainVersionTags() {
-        assertEquals("https://github.com/NonSwag/jpm/releases/download/0.3.0", Upgrade.base("0.3.0"));
-        assertEquals("https://github.com/NonSwag/jpm/releases/latest/download", Upgrade.base(null));
+        assertEquals("https://github.com/java-package-manager/jpm/releases/download/0.3.0", Upgrade.base("0.3.0"));
+        assertEquals("https://github.com/java-package-manager/jpm/releases/latest/download", Upgrade.base(null));
     }
 }

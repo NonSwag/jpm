@@ -19,7 +19,7 @@ import java.util.List;
  * {@code jpm upgrade}: replaces the jpm binary with the latest release (or a given version), checked against
  * the release's SHA256SUMS like the install script does, then refreshes the java shims.
  *
- * <p>Releases come from {@code https://github.com/NonSwag/jpm/releases}; {@code JPM_REPO} changes the
+ * <p>Releases come from {@code https://github.com/java-package-manager/jpm/releases}; {@code JPM_REPO} changes the
  * repository and {@code JPM_INSTALL_BASE} replaces the download location (a mirror, or file:// for tests).
  *
  * <p>{@code --canary} installs the newest canary build instead: CI publishes every commit on the main branch
@@ -51,7 +51,7 @@ final class Upgrade {
 
     static String repo() {
         String r = System.getenv("JPM_REPO");
-        return r == null || r.isBlank() ? "NonSwag/jpm" : r;
+        return r == null || r.isBlank() ? "java-package-manager/jpm" : r;
     }
 
     /** Where release files live: the latest release, or the release tagged with the version. */

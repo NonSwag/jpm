@@ -12,8 +12,8 @@ Gradle projects (`jpm import`, and Git dependencies without a `project.jsonc`).
 ## Install
 
 ```sh
-curl -fsSL https://github.com/NonSwag/jpm/releases/latest/download/install.sh | sh      # Linux, macOS
-irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex           # Windows
+curl -fsSL https://github.com/java-package-manager/jpm/releases/latest/download/install.sh | sh      # Linux, macOS
+irm https://github.com/java-package-manager/jpm/releases/latest/download/install.ps1 | iex           # Windows
 ```
 
 The scripts:
@@ -196,7 +196,7 @@ resources), `scripts/`, `patches/`, `.cache/` (build cache, not committed), `dis
 release at a stable address:
 
 ```
-https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json
+https://github.com/java-package-manager/jpm/releases/latest/download/project.schema.json
 ```
 
 `jpm init` and `jpm import` write it into new manifests as `"$schema"`, which VS Code, IntelliJ IDEA, Zed,
@@ -205,12 +205,12 @@ and validation. Add the line to an existing manifest to get the same:
 
 ```jsonc
 {
-  "$schema": "https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json",
+  "$schema": "https://github.com/java-package-manager/jpm/releases/latest/download/project.schema.json",
   "name": "my-app"
 }
 ```
 
-The [IntelliJ plugin](https://github.com/NonSwag/jpm-intellij) bundles the schema, so there every
+The [IntelliJ plugin](https://github.com/java-package-manager/jpm-intellij) bundles the schema, so there every
 `project.jsonc` is covered without the line and offline. The schema also describes the settings of the
 `publish` extension under `"extensions"`.
 

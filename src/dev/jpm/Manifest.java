@@ -19,7 +19,7 @@ public final class Manifest {
     public static final String FILE = "project.jsonc";
     public static final String LOCK = "project.lock";
     /** The JSON Schema of project.jsonc, schema/project.schema.json, as attached to every release. */
-    public static final String SCHEMA_URL = "https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json";
+    public static final String SCHEMA_URL = "https://github.com/java-package-manager/jpm/releases/latest/download/project.schema.json";
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
             "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",

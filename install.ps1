@@ -1,13 +1,13 @@
 # Installs the native jpm binary (and jvm.exe, a copy of it) into %USERPROFILE%\.jpm\bin.
 #
-#   irm https://github.com/NonSwag/jpm/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/java-package-manager/jpm/releases/latest/download/install.ps1 | iex
 #
 # $env:JPM_VERSION picks a version ('canary' for the newest build of the main branch), $env:JPM_HOME changes the install root, and $env:JPM_INSTALL_BASE
 # replaces the download URL. The install folder is added to your user PATH (once); set
 # $env:JPM_NO_MODIFY_PATH to skip that.
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:JPM_REPO) { $env:JPM_REPO } else { 'NonSwag/jpm' }
+$repo = if ($env:JPM_REPO) { $env:JPM_REPO } else { 'java-package-manager/jpm' }
 if ($env:JPM_INSTALL_BASE) { $base = $env:JPM_INSTALL_BASE }
 elseif ($env:JPM_VERSION -eq 'canary') {
   # the release tagged canary names the newest canary build
