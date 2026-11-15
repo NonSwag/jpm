@@ -8,6 +8,7 @@ import dev.jpm.util.Exec;
 import dev.jpm.util.Fs;
 import dev.jpm.util.JpmException;
 import dev.jpm.util.Log;
+import dev.jpm.version.VersionSpecs;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -89,31 +90,38 @@ public final class GradleImport {
         }
         try {
             Path script = tmp.resolve("jpm-model.gradle");
-            Path out = tmp.resolve("model.json");
+            Path out = tmp.resolve("model");
+            Fs.mkdirs(out);
             Fs.write(script, GradleModelScript.TEXT);
             Jdk jdk = Toolchain.require(JavaSpec.any());
             List<String> cmd = new ArrayList<>();
             if (launcher.getFileName().toString().equals("gradlew") && !Files.isExecutable(launcher)) cmd.add("sh");
             cmd.add(launcher.toString());
+            // every project runs its own jpmModel task; the configuration cache cannot hold what they read
             cmd.addAll(List.of("-q", "--no-daemon", "--console=plain", "--init-script", script.toString(),
-                    "-Djpm.model.output=" + out, "help"));
+                    "-Djpm.model.output=" + out, "-Dorg.gradle.configuration-cache=false",
+                    "-Dorg.gradle.unsafe.isolated-projects=false", "jpmModel"));
             Log.step("Reading", "the Gradle build with " + launcher.getFileName() + Log.dim(" (runs the build scripts)"));
             Map<String, String> env = new LinkedHashMap<>();
             env.put("JAVA_HOME", jdk.home().toString());
             Exec.Result r = Exec.capture(dir, cmd, env);
-            if (!r.ok() || !Files.exists(out)) {
+            List<Path> reports = Fs.files(out, ".json");
+            if (!r.ok() || reports.isEmpty()) {
                 throw new JpmException("Gradle could not evaluate the build:\n" + (r.err() + r.out()).strip()
                         + "\nFix the build, or import without running Gradle: `jpm import --static`.");
             }
-            Map<String, Object> model = (Map<String, Object>) Jsonc.parse(Fs.read(out));
+            List<Map<String, Object>> models = new ArrayList<>();
+            for (Path f : reports) models.add((Map<String, Object>) Jsonc.parse(Fs.read(f)));
+            // the root first, then the subprojects in path order, as Gradle lists them
+            models.sort(java.util.Comparator.comparing((Map<String, Object> m) -> !":".equals(m.get("path")))
+                    .thenComparing(m -> String.valueOf(m.get("path"))));
             List<GProject> projects = new ArrayList<>();
             Imported imp = new Imported("Gradle");
-            for (Object o : (List<Object>) model.get("projects")) {
-                Map<String, Object> pm = (Map<String, Object>) o;
+            for (Map<String, Object> pm : models) {
                 projects.add(fromModel(pm));
                 if (pm.get("resolveError") != null) {
-                    imp.warn((String) pm.get("dir"), "Gradle could not resolve dependencies (" + pm.get("resolveError")
-                            + "); versions managed by platforms are read from their POMs instead");
+                    imp.warn((String) pm.get("dir"), "Gradle could not resolve " + pm.get("resolveError")
+                            + "; versions it did not resolve are read from the platforms' POMs instead");
                 }
             }
             applyPlatforms(projects, repo, imp);
@@ -623,7 +631,17 @@ public final class GradleImport {
                     }
                     String key = d.group + ":" + d.name;
                     String version = d.version;
-                    if (version == null || version.contains("+") || version.startsWith("latest.")) {
+                    // Dynamic versions (1.+, latest.release, ranges) are jpm versions too, and stay dynamic;
+                    // what Gradle resolved fills in versions that are missing (managed by a platform) or unreadable.
+                    boolean readable = version != null && !version.isBlank();
+                    if (readable) {
+                        try {
+                            VersionSpecs.parse(version);
+                        } catch (IllegalArgumentException unreadable) {
+                            readable = false;
+                        }
+                    }
+                    if (!readable) {
                         String res = p.resolved.get(key);
                         if (res != null) {
                             version = res;

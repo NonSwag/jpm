@@ -39,7 +39,7 @@ class VersionSpecsTest {
     void gradle() {
         assertEquals("1.10.0", best("1.+"));
         assertEquals("1.2.0", best("1.2.+"));
-        assertEquals("2.0.0", best("+"));
+        assertEquals("2.2.0-SNAPSHOT", best("+"), "Gradle's + takes the newest of any kind");
         assertTrue(m("1.+", "1.10.0") && !m("1.+", "2.0.0") && !m("1.2.+", "1.20.0"));
         assertEquals("1.10.0", best("]1.0,2.0["));
         assertFalse(m("]1.0,2.0[", "1.0"));

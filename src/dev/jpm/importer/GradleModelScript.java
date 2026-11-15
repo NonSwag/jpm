@@ -6,12 +6,14 @@ final class GradleModelScript {
 
     static final String TEXT = """
 // Written by jpm: reports the Gradle build model as JSON for `jpm import`. It does not change the build.
+// Each project reports itself from its own jpmModel task: Gradle only lets a project resolve its
+// configurations while it holds that project's lock, which a build-wide callback does not.
 import groovy.json.JsonOutput
 
-gradle.projectsEvaluated {
-    def out = []
-    def root = gradle.rootProject
-    root.allprojects.each { p ->
+def jpmModelDir = new File(System.getProperty('jpm.model.output'))
+
+def jpmModel = { Project p ->
+    def root = p.rootProject
         def info = [
             path       : p.path,
             name       : p.name,
@@ -71,6 +73,7 @@ gradle.projectsEvaluated {
                 [group: d.group, name: d.name, version: d.version, category: category, classifier: classifier, excludes: excludes]
             }
         }
+        def failures = [:]
         ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath', 'annotationProcessor'].each { c ->
             def conf = p.configurations.findByName(c)
             if (conf == null || !conf.canBeResolved) return
@@ -82,16 +85,31 @@ gradle.projectsEvaluated {
                     }
                 }
             } catch (e) {
-                info.resolveError = e.message
+                def cause = e
+                while (cause.cause != null && cause.cause != cause) cause = cause.cause
+                def why = cause.message?.readLines()?.find { it.trim() }?.trim() ?: cause.class.simpleName
+                failures.computeIfAbsent(why) { [] } << c
             }
         }
+        if (failures) info.resolveError = failures.collect { why, confs -> confs.join(', ') + ' (' + why + ')' }.join('; ')
         p.repositories.each { r ->
             if (r instanceof MavenArtifactRepository) info.repositories << r.url.toString()
         }
-        out << info
+        return info
+}
+
+gradle.allprojects { Project p ->
+    p.tasks.register('jpmModel') { t ->
+        t.group = 'help'
+        t.description = 'Reports the build model for jpm import'
+        try { t.notCompatibleWithConfigurationCache('jpm reads the build model') } catch (ignored) {}
+        t.doLast {
+            def info = jpmModel(p)
+            info.gradleVersion = p.gradle.gradleVersion
+            def name = p.path == ':' ? 'root' : p.path.substring(1).replace(':', '__')
+            new File(jpmModelDir, name + '.json').text = JsonOutput.toJson(info)
+        }
     }
-    def file = new File(System.getProperty('jpm.model.output'))
-    file.text = JsonOutput.toJson([gradleVersion: gradle.gradleVersion, projects: out])
 }
 """;
 }

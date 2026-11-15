@@ -10,7 +10,7 @@ import java.util.Optional;
  * <ul>
  *   <li>Maven: {@code 1.2.3} (exact), {@code [1.0,2.0)}, {@code [1.5,)}, {@code (,1.0]}, {@code [1.0]},
  *       {@code (,1.0],[1.2,)}, and {@code RELEASE} / {@code LATEST};</li>
- *   <li>Gradle: {@code 1.+}, {@code 1.2.+}, {@code +}, {@code ]1.0,2.0[}, {@code [1.0,2.0[},
+ *   <li>Gradle: {@code 1.+}, {@code 1.2.+}, {@code +} (the newest of any kind, as in Gradle), {@code ]1.0,2.0[}, {@code [1.0,2.0[},
  *       {@code latest.release}, {@code latest.milestone}, {@code latest.integration}, and strict
  *       {@code 1.2!!} or {@code [1.0,2.0)!!1.5} (that range, preferring 1.5 when it is available);</li>
  *   <li>npm: {@code ^1.2}, {@code ~1.2.3}, {@code ~1}, {@code >=0.1}, {@code >1.0 <=2.0}, {@code 1.x},
@@ -123,7 +123,9 @@ public final class VersionSpecs {
 
         static Any named(String s, String text) {
             return switch (s.toLowerCase(Locale.ROOT)) {
-                case "*", "+", "x", "latest", "latest.release", "release" ->
+                // Gradle's + is its newest version of any kind, like latest.integration
+                case "+" -> new Any(text, true, true);
+                case "*", "x", "latest", "latest.release", "release" ->
                         s.equals("LATEST") ? new Any(text, true, true) : new Any(text, false, false);
                 case "latest.milestone" -> new Any(text, true, false);
                 case "latest.integration" -> new Any(text, true, true);
@@ -153,7 +155,10 @@ public final class VersionSpecs {
         public String toString() { return text; }
     }
 
-    /** Gradle's prefix versions: {@code 1.+} is every version starting with {@code 1.}, {@code 1.2.+} with {@code 1.2.}. */
+    /**
+     * Gradle's prefix versions: {@code 1.+} is every version starting with {@code 1.}, {@code 1.2.+} with
+     * {@code 1.2.}. As in Gradle, the newest one is chosen whatever it is, snapshots and pre-releases too.
+     */
     static final class GradlePrefix implements VersionSpec {
         private final String text;
         private final String prefix;
@@ -170,6 +175,13 @@ public final class VersionSpecs {
                 throw new IllegalArgumentException("Invalid version \"" + text + "\": a + goes after a version prefix, as in 1.+ or 1.2.+");
             }
             return new GradlePrefix(text, prefix);
+        }
+
+        @Override
+        public Optional<Version> best(Collection<Version> candidates) {
+            Version best = null;
+            for (Version v : candidates) if (matches(v) && (best == null || v.compareTo(best) > 0)) best = v;
+            return Optional.ofNullable(best);
         }
 
         @Override

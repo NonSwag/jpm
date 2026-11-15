@@ -138,7 +138,7 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 | exact | `1.2.3`, `=1.2.3`, `1.2.3!!` | that version (for Git dependencies a bare `1.2` is npm's `1.2.x`) |
 | Maven range | `[1.0,2.0)`, `[1.5,)`, `(,1.0]`, `[1.0]`, `(,1.0],[1.2,)` | `[` `]` include the end, `(` `)` exclude it |
 | Gradle range | `]1.0,2.0[`, `[1.0,2.0[` | reversed brackets exclude the end |
-| Gradle prefix | `1.+`, `1.2.+`, `+` | every version starting with `1.`, `1.2.`, any version |
+| Gradle prefix | `1.+`, `1.2.+`, `+` | the newest version starting with `1.`, `1.2.`, or any; as in Gradle, snapshots and pre-releases count |
 | caret / tilde | `^1.2`, `^0.2.3`, `~1.2.3`, `~1` | compatible changes; `~` patch changes (minor for `~1`) |
 | comparisons | `>=0.1`, `>1.0 <=2.0`, `1.0 - 2.0` | combined with spaces; a hyphen gives both ends |
 | wildcards | `1.x`, `1.2.*`, `*` | any value in that position |
@@ -148,7 +148,7 @@ Dependency arguments: `group:artifact@1.2.3`, `group:artifact:1.2.3`, `'group:ar
 
 Ranges compare versions the way Maven orders them, so qualifiers work: `^33` matches `33.4.8-jre`.
 Pre-releases (alpha, beta, milestone, rc) and snapshots are only chosen when the range names one, as in
-`^1.3.0-beta`, or asks for them (`latest.milestone`, `latest.integration`).
+`^1.3.0-beta`, or asks for them (`latest.milestone`, `latest.integration`, Gradle's `+` versions).
 
 A dependency is a version string, or an object with options:
 

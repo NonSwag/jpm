@@ -79,11 +79,60 @@ public final class MavenRepo {
         String searched = String.join("\n", repos);
         if (Files.exists(missing) && !refreshMetadata && Fs.read(missing).equals(searched)) return null;
         String rel = path(group, artifact, version, classifier, ext);
+        boolean snapshot = version.endsWith("-SNAPSHOT");
         for (String repo : repos) {
             if (download(repo + rel, local)) return local;
+            // Snapshot repositories publish timestamped files (lib-1.0-20250101.120000-3.jar), named in
+            // that version's maven-metadata.xml; ~/.m2 keeps the plain -SNAPSHOT name.
+            if (snapshot) {
+                String timestamped = snapshotVersion(repo, group, artifact, version, classifier, ext);
+                String file = group.replace('.', '/') + "/" + artifact + "/" + version + "/" + artifact + "-" + timestamped
+                        + (classifier == null || classifier.isEmpty() ? "" : "-" + classifier) + "." + ext;
+                if (timestamped != null && download(repo + file, local)) {
+                    return local;
+                }
+            }
         }
         if (!offline) Fs.write(missing, searched);
         return null;
+    }
+
+    /**
+     * The timestamped version a snapshot repository publishes for {@code version} (e.g. 1.0-SNAPSHOT is
+     * 1.0-20250101.120000-3), for the given extension and classifier, or null if the repository has none.
+     */
+    String snapshotVersion(String repo, String group, String artifact, String version, String classifier, String ext) {
+        String rel = group.replace('.', '/') + "/" + artifact + "/" + version + "/maven-metadata.xml";
+        Path meta = cache.resolve(rel).resolveSibling("maven-metadata-" + Integer.toHexString(repo.hashCode()) + ".xml");
+        if (!download(repo + rel, meta)) return null;
+        return snapshotVersion(Fs.read(meta), version, classifier, ext);
+    }
+
+    static String snapshotVersion(String metadata, String version, String classifier, String ext) {
+        String cls = classifier == null ? "" : classifier;
+        // Maven 3: one <snapshotVersion> per file
+        Matcher sv = Pattern.compile("<snapshotVersion>(.*?)</snapshotVersion>", Pattern.DOTALL).matcher(metadata);
+        String found = null;
+        while (sv.find()) {
+            String block = sv.group(1);
+            String e = tag(block, "extension"), c = tag(block, "classifier"), v = tag(block, "value");
+            if (v != null && ext.equals(e) && cls.equals(c == null ? "" : c)) found = v;
+        }
+        if (found != null) return found;
+        // Maven 2: one timestamp and build number for every file
+        String ts = tag(metadata, "timestamp"), build = tag(metadata, "buildNumber");
+        if (ts != null && build != null) return version.substring(0, version.length() - "SNAPSHOT".length()) + ts + "-" + build;
+        return null;
+    }
+
+    /** For tests: {@link #snapshotVersion(String, String, String, String)}. */
+    public static String snapshotVersionForTests(String metadata, String version, String classifier, String ext) {
+        return snapshotVersion(metadata, version, classifier, ext);
+    }
+
+    private static String tag(String xml, String name) {
+        Matcher m = Pattern.compile("<" + name + ">\\s*([^<]*?)\\s*</" + name + ">").matcher(xml);
+        return m.find() ? m.group(1) : null;
     }
 
     public Path require(String group, String artifact, String version, String classifier, String ext) {

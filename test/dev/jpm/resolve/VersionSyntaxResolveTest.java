@@ -56,7 +56,7 @@ class VersionSyntaxResolveTest {
         expected.put("LATEST", "2.2.0-SNAPSHOT");
         expected.put("1.+", "1.10.0");
         expected.put("1.2.+", "1.2.0");
-        expected.put("+", "2.0.0");
+        expected.put("+", "2.2.0-SNAPSHOT");
         expected.put("]1.0,2.0[", "1.10.0");
         expected.put("latest.release", "2.0.0");
         expected.put("latest.milestone", "2.1.0-beta");
