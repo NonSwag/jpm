@@ -569,6 +569,7 @@ public final class GradleImport {
 
         if (workspace) {
             Map<String, Object> ws = new LinkedHashMap<>();
+            ws.put("$schema", dev.jpm.Manifest.SCHEMA_URL);
             ws.put("name", root.name);
             if (root.version != null) ws.put("version", root.version);
             ws.put("workspace", modules.stream().map(p -> p.dir).toList());
@@ -579,6 +580,7 @@ public final class GradleImport {
         for (GProject p : modules) {
             String where = p.dir;
             Map<String, Object> man = new LinkedHashMap<>();
+            man.put("$schema", dev.jpm.Manifest.SCHEMA_URL);
             man.put("name", p.name);
             if (p.group != null) man.put("group", p.group);
             if (p.version != null && (!workspace || !p.version.equals(root.version))) man.put("version", p.version);

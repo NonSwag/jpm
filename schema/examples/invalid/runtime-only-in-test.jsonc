@@ -1,0 +1,1 @@
+{ "name": "a", "test": { "a:b": { "version": "1", "runtimeOnly": true } } }

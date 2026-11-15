@@ -139,13 +139,14 @@ final class Commands {
         }
         String manifest = """
                 {
+                  "$schema": "%s",
                   "name": "%s",
                   "version": "0.1.0",
                   %s"main": "%s.App",
                   "runtime": {},
                   "test": {}
                 }
-                """.formatted(name, "\"java\": \"" + major + "\",\n  ", pkg);
+                """.formatted(Manifest.SCHEMA_URL, name, "\"java\": \"" + major + "\",\n  ", pkg);
         Fs.write(cwd.resolve(Manifest.FILE), manifest);
         Path app = cwd.resolve("src").resolve(pkg).resolve("App.java");
         if (!Files.exists(app)) {

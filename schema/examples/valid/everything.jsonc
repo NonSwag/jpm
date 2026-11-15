@@ -1,0 +1,53 @@
+// Every field jpm reads.
+{
+  "$schema": "https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json",
+  "name": "my-app",
+  "version": "1.0.0-SNAPSHOT",
+  "group": "com.example",
+  "description": "An example",
+  "license": "Apache-2.0",
+  "url": "https://github.com/me/my-app",
+  "java": "graalvm-21",
+  "target": 17,
+  "main": { "cli": "com.example.Cli", "server": "com.example.Server" },
+  "runtime": {
+    "com.google.guava:guava": "[33.0,34.0)",
+    "org.lwjgl:lwjgl:natives-linux": "3.3.4",
+    "org.slf4j:slf4j-simple": { "version": "2.0.16", "runtimeOnly": true },
+    "com.example:lib": { "version": "^1.2", "exclude": ["commons-logging:commons-logging", "org.unwanted:*"] },
+    "github:user/repo/api": "^1.2",
+    "workspace:core": "*",
+  },
+  "dev": { "org.projectlombok:lombok": "1.18.34" },
+  "test": { "org.junit.jupiter:junit-jupiter": { "version": "5.11.4", "exclude": ["org.opentest4j"] } },
+  "define": {
+    "API_URL": { "type": "string", "env": "API_URL" },
+    "RETRIES": { "type": "int", "value": 3 },
+    "DEBUG": { "type": "boolean", "env": "DEBUG", "default": false },
+    "BUILD_NAME": "local",
+    "github:user/repo/api": { "API_KEY": "..." }
+  },
+  "defineClass": "com.example.generated.Build",
+  "scripts": { "format": "scripts/format.sh", "upload-mappings": "scripts/UploadMappings.java" },
+  "hooks": { "prebuild": "format", "postbuild:release": "upload-mappings" },
+  "patches": { "com.example:old-lib": "patches/old-lib.patch" },
+  "visibility": "internal",
+  "repositories": ["https://repo.example.com/releases", "file:///opt/repo"],
+  "javacArgs": ["-Xlint:all"],
+  "nativeArgs": ["--no-fallback"],
+  "layout": "maven",
+  "package": "bundle",
+  "extensions": {
+    "publish": {
+      "repositories": {
+        "releases": { "url": "https://repo.example.com/releases", "snapshots": "https://repo.example.com/snapshots" },
+        "central": { "type": "central", "publishingType": "user_managed" }
+      },
+      "developers": [{ "id": "me", "name": "My Name", "email": "me@example.com" }],
+      "scm": "https://github.com/me/my-app",
+      "javadoc": true,
+      "sign": false
+    },
+    "other-extension": { "anything": [1, 2, 3] }
+  }
+}

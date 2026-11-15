@@ -18,6 +18,12 @@ import java.util.TreeMap;
 public final class Manifest {
     public static final String FILE = "project.jsonc";
     public static final String LOCK = "project.lock";
+    /** The JSON Schema of project.jsonc, schema/project.schema.json, as attached to every release. */
+    public static final String SCHEMA_URL = "https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json";
+    /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
+    public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
+            "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
+            "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
         RUNTIME("runtime"), DEV("dev"), TEST("test");
@@ -85,9 +91,7 @@ public final class Manifest {
         }
         if (!root.isObject()) throw err(root, "the manifest must be a JSON object");
 
-        Set<String> known = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
-                "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-                "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
+        Set<String> known = FIELDS;
         for (Jsonc.Member m : root.members.values()) {
             if (!known.contains(m.key)) {
                 throw new JpmException(file + ":" + line(m.keyStart) + ": unknown field \"" + m.key + "\"");

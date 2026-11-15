@@ -62,6 +62,7 @@ public final class MavenImport {
 
         if (workspace) {
             Map<String, Object> ws = new LinkedHashMap<>();
+            ws.put("$schema", dev.jpm.Manifest.SCHEMA_URL);
             ws.put("name", rootModel.artifact);
             if (rootModel.version != null) ws.put("version", rootModel.version);
             ws.put("workspace", modules.stream().map(Module::dir).toList());
@@ -116,6 +117,7 @@ public final class MavenImport {
         Pom pom = m.pom;
         String where = m.dir;
         Map<String, Object> man = new LinkedHashMap<>();
+        man.put("$schema", dev.jpm.Manifest.SCHEMA_URL);
         man.put("name", pom.artifact);
         if (pom.group != null) man.put("group", pom.group);
         if (!workspace || !java.util.Objects.equals(pom.version, rootModel.version)) {

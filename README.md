@@ -159,6 +159,30 @@ resources), `scripts/`, `patches/`, `.cache/` (build cache, not committed), `dis
 `src/assets/demo/icon.png` is `demo/icon.png` in the jar; service files go in
 `src/assets/META-INF/services/`. `.java` files inside the assets folders are not compiled.
 
+## Editor support
+
+`project.jsonc` has a JSON Schema, [`schema/project.schema.json`](schema/project.schema.json), attached to every
+release at a stable address:
+
+```
+https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json
+```
+
+`jpm init` and `jpm import` write it into new manifests as `"$schema"`, which VS Code, IntelliJ IDEA, Zed,
+Neovim (with a JSON language server) and most other editors pick up for completion, documentation on hover
+and validation. Add the line to an existing manifest to get the same:
+
+```jsonc
+{
+  "$schema": "https://github.com/NonSwag/jpm/releases/latest/download/project.schema.json",
+  "name": "my-app"
+}
+```
+
+The [IntelliJ plugin](https://github.com/NonSwag/jpm-intellij) bundles the schema, so there every
+`project.jsonc` is covered without the line and offline. The schema also describes the settings of the
+`publish` extension under `"extensions"`.
+
 ## How it works
 
 **Resolution.** Maven and Git packages live in one graph and conflicts are settled the same way for

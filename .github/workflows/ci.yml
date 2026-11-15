@@ -18,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check the project.jsonc schema
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 schema/check.py project.jsonc fixtures/bundle-demo/project.jsonc fixtures/bundle-demo/*/project.jsonc schema/examples/valid/*.jsonc
+          python3 schema/check.py --expect-invalid schema/examples/invalid/*.jsonc
+
       - name: Check that the tag matches the manifest version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -268,7 +274,7 @@ jobs:
               case "$f" in *.exe) cp "$f" "release/jpm-$platform.exe" ;; *) cp "$f" "release/jpm-$platform" ;; esac
             done
           done
-          cp install.sh install.ps1 release/
+          cp install.sh install.ps1 schema/project.schema.json release/
           # `jpm upgrade` reads the latest version from this file
           printf '%s\n' "$GITHUB_REF_NAME" > release/VERSION
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
