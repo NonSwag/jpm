@@ -49,6 +49,8 @@ class UpgradeTest {
         assertEquals("jpm 0.6.0 is available. Run `jpm upgrade`.\njpm 0.6.0-abcdef1 is the newest canary build. Run `jpm upgrade --canary`.",
                 Upgrade.updateNotice("0.5.0-1234567", l, c));
         assertNull(Upgrade.updateNotice("0.6.0-abcdef1", l, c));
+        // a canary is never announced as a release
+        assertNull(Upgrade.updateNotice("0.5.0", c, c));
         // no answer, no notice
         assertNull(Upgrade.updateNotice("0.5.0", dir.resolve("missing").toUri().toString(), c));
     }

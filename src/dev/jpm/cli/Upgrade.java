@@ -125,7 +125,7 @@ final class Upgrade {
         String release = onCanary ? releaseOf(current) : current;
         java.util.List<String> lines = new java.util.ArrayList<>();
         try {
-            if (latest != null && Version.of(latest).compareTo(Version.of(release)) > 0) {
+            if (latest != null && !isCanary(latest) && Version.of(latest).compareTo(Version.of(release)) > 0) {
                 lines.add("jpm " + latest + " is available. Run `jpm upgrade`.");
             }
         } catch (RuntimeException ignored) {
