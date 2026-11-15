@@ -81,7 +81,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `add <dep>[@version]` | Add dependencies (`--dev`, `--test`, `-r <url>` to add a Maven repository). Without a version: latest release (Maven) or `^latest-tag` (Git) |
 | `remove <dep>` | Remove dependencies |
 | `install [--frozen]` | Resolve and write `project.lock`; `--frozen` fails if the lock is stale (CI) |
-| `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them |
+| `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them. `update -g [name…]` updates global extensions |
 | `outdated`, `why <dep>` | Inspect the graph |
 | `info [--json]` | Describe the project: modules, versions, folders, dependencies; `--json` is a stable format for extensions, `--ide` adds test folders, scripts and scoped dependencies with sources (used by the IntelliJ plugin) |
 | `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |

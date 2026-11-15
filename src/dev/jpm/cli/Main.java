@@ -25,7 +25,8 @@ public final class Main {
                                           -g installs an extension)
               remove <dep>                Remove dependencies (-g removes an extension)
               install                     Resolve dependencies and write project.lock (--frozen in CI)
-              update [dep...]             Re-resolve within ranges (--latest goes past them)
+              update [dep...]             Re-resolve within ranges (--latest goes past them;
+                                          -g updates the global extensions)
               outdated                    Show dependencies with newer versions
               why <dep>                   Show why a dependency is in the graph
               info [--json]               Describe the project (modules, dependencies); --json for extensions
