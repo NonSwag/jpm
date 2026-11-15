@@ -105,6 +105,7 @@ class ImportTest {
                     // a comment: implementation 'not:real:1'
                     compileOnly 'org.projectlombok:lombok:1.18.34'
                     compileOnly 'io.papermc.paper:paper-api:26.3.build.+'
+                    compileOnlyApi 'org.jspecify:jspecify:1.0.0'
                     testImplementation group: 'org.junit.jupiter', name: 'junit-jupiter', version: '5.11.4'
                 }
                 """);
@@ -123,7 +124,9 @@ class ImportTest {
         assertEquals("21", lib.get("target"));
         assertEquals(Map.of("com.google.guava:guava", "33.3.1-jre", "org.apache.commons:commons-lang3", "3.14.0"), lib.get("runtime"));
         // dynamic versions are jpm versions too, and stay dynamic
-        assertEquals(Map.of("org.projectlombok:lombok", "1.18.34", "io.papermc.paper:paper-api", "26.3.build.+"), lib.get("dev"));
+        // compileOnlyApi: a dev dependency that consumers compile against too
+        assertEquals(Map.of("org.projectlombok:lombok", "1.18.34", "io.papermc.paper:paper-api", "26.3.build.+",
+                "org.jspecify:jspecify", Map.of("version", "1.0.0", "api", true)), lib.get("dev"));
         assertEquals(Map.of("org.junit.jupiter:junit-jupiter", "5.11.4"), lib.get("test"));
         Map<String, Object> app = imp.manifests.get("app");
         assertEquals("com.example.Main", app.get("main"));

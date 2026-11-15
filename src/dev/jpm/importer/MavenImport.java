@@ -208,12 +208,17 @@ public final class MavenImport {
 
     /** A version string, or the object form when there are exclusions or the dependency is runtime-only. */
     static Object depValue(String version, java.util.Collection<String> exclusions, boolean runtimeOnly) {
+        return depValue(version, exclusions, runtimeOnly, false);
+    }
+
+    static Object depValue(String version, java.util.Collection<String> exclusions, boolean runtimeOnly, boolean api) {
         java.util.List<String> ex = new ArrayList<>(exclusions);
-        if (ex.isEmpty() && !runtimeOnly) return version;
+        if (ex.isEmpty() && !runtimeOnly && !api) return version;
         Map<String, Object> o = new LinkedHashMap<>();
         o.put("version", version);
         if (!ex.isEmpty()) o.put("exclude", new ArrayList<>(new java.util.TreeSet<>(ex)));
         if (runtimeOnly) o.put("runtimeOnly", Boolean.TRUE);
+        if (api) o.put("api", Boolean.TRUE);
         return o;
     }
 

@@ -21,7 +21,7 @@
     "org.example:npm-style": ">=0.1 <2",
     "org.example:newest": "latest.release",
   },
-  "dev": { "org.projectlombok:lombok": "1.18.34" },
+  "dev": { "org.projectlombok:lombok": "1.18.34", "io.papermc.paper:paper-api": { "version": "26.3.build.+", "api": true } },
   "test": { "org.junit.jupiter:junit-jupiter": { "version": "5.11.4", "exclude": ["org.opentest4j"] } },
   "define": {
     "API_URL": { "type": "string", "env": "API_URL" },

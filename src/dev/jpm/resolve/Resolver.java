@@ -253,6 +253,12 @@ public final class Resolver {
                 String id = idOf(d.key());
                 p.deps.put(id, new Graph.Edge(id, d.runtimeOnly(), d.exclusions()));
             }
+            // "api" dev dependencies: siblings compile against them, nothing runs with them
+            for (Manifest.Dependency d : m.manifest.deps(Manifest.Scope.DEV)) {
+                if (!d.api()) continue;
+                String id = idOf(d.key());
+                p.deps.putIfAbsent(id, new Graph.Edge(id, false, d.exclusions(), true));
+            }
             g.put(p);
         }
     }
@@ -562,6 +568,12 @@ public final class Resolver {
                 edges.add(new EdgeReq(idOf(d.key()), d.key().isGit() ? Graph.Kind.GIT : Graph.Kind.MAVEN, d.spec(),
                         d.runtimeOnly(), d.exclusions()));
             }
+        }
+        // "api" dev dependencies: consumers compile against them; the platform provides them at run time
+        for (Manifest.Dependency d : mod.manifest().deps(Manifest.Scope.DEV)) {
+            if (!d.api() || d.key().isWorkspace()) continue;
+            edges.add(new EdgeReq(idOf(d.key()), d.key().isGit() ? Graph.Kind.GIT : Graph.Kind.MAVEN, d.spec(),
+                    false, d.exclusions(), true));
         }
         return new Expanded(edges, true, mod.isPublic());
     }

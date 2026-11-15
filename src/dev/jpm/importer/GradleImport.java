@@ -181,8 +181,8 @@ public final class GradleImport {
 
     private static final Pattern QUOTED = Pattern.compile("[\"']([^\"']+)[\"']");
     private static final Pattern CONF = Pattern.compile(
-            "\\b(api|implementation|compileOnly|compileOnlyApi|runtimeOnly|annotationProcessor|testImplementation|"
-                    + "testCompileOnly|testRuntimeOnly|testAnnotationProcessor)\\s*\\(?\\s*(.+)");
+            "\\b(api|implementation|compileOnlyApi|compileOnly|runtimeOnly|annotationProcessor|testImplementation|"
+                    + "testCompileOnly|testRuntimeOnly|testAnnotationProcessor)\\b\\s*\\(?\\s*(.+)");
 
     /** Removes {@code name { ... }} blocks (balanced braces) from build script text. */
     static String withoutBlocks(String text, String... names) {
@@ -611,7 +611,6 @@ public final class GradleImport {
                     case "compileOnly", "compileOnlyApi", "annotationProcessor" -> dev;
                     default -> test;
                 };
-                if (conf.equals("compileOnlyApi") && !e.getValue().isEmpty()) imp.warn(where, "compileOnlyApi dependencies become dev dependencies; consumers do not see them");
                 for (GDep d : e.getValue()) {
                     if ("platform".equals(d.category) || "enforced-platform".equals(d.category)) {
                         imp.warn(where, "platform " + (d.group != null ? d.group + ":" + d.name : d.raw)
@@ -651,7 +650,8 @@ public final class GradleImport {
                         }
                     }
                     String k = d.classifier() != null && !d.classifier().isEmpty() ? key + ":" + d.classifier() : key;
-                    target.put(k, MavenImport.depValue(version, d.excludes(), conf.equals("runtimeOnly")));
+                    // compileOnlyApi: a dev dependency that consumers compile against too
+                    target.put(k, MavenImport.depValue(version, d.excludes(), conf.equals("runtimeOnly"), conf.equals("compileOnlyApi")));
                 }
             }
             if (!runtime.isEmpty()) man.put("runtime", runtime);

@@ -816,6 +816,7 @@ final class Commands {
                 dep.put("scope", d.scope().key);
                 dep.put("spec", d.spec());
                 if (d.runtimeOnly()) dep.put("runtimeOnly", true);
+                if (d.api()) dep.put("api", true);
                 if (!d.exclusions().isEmpty()) dep.put("exclude", new ArrayList<>(d.exclusions()));
                 switch (k.kind()) {
                     case MAVEN -> {

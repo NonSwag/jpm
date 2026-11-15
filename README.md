@@ -157,8 +157,23 @@ A dependency is a version string, or an object with options:
   "org.lwjgl:lwjgl:natives-linux": "3.3.4",                              // classifier: third part of the key
   "org.slf4j:slf4j-simple": { "version": "2.0.16", "runtimeOnly": true }, // on the runtime classpath only
   "com.example:lib": { "version": "1.2", "exclude": ["commons-logging:commons-logging", "org.unwanted:*"] }
+},
+"dev": {
+  "io.papermc.paper:paper-api": { "version": "26.3.build.+", "api": true }  // consumers compile against it too
 }
 ```
+
+What reaches the projects and modules that depend on this one, like Gradle's configurations:
+
+| Declared as | Gradle | Here | Consumers compile | Consumers run, bundles |
+|---|---|---|---|---|
+| `runtime` | `api` | compile, run | yes | yes |
+| `runtime` with `"runtimeOnly": true` | `runtimeOnly` | run | no | yes |
+| `dev` | `compileOnly` | compile | no | no |
+| `dev` with `"api": true` | `compileOnlyApi` | compile | yes | no |
+
+`"api": true` is for APIs a platform provides, such as a server API that consumers' code uses too. Published
+with jpm-publish, it is in the Gradle Module Metadata (compile only) and `provided` in the POM.
 
 Exclusions apply to everything the dependency brings in, as in Maven. `jpm add g:a:classifier@1.0` adds a
 classified jar.

@@ -40,11 +40,16 @@ public final class Manifest {
 
     /**
      * A declared dependency. Written as a version string, or as an object
-     * {@code {"version": "...", "exclude": [...], "runtimeOnly": true}}.
+     * {@code {"version": "...", "exclude": [...], "runtimeOnly": true}}. {@code api}: a dev dependency that
+     * consumers compile against too (Gradle's compileOnlyApi); never at run time.
      */
-    public record Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly) {
+    public record Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly, boolean api) {
         public Dependency(DepKey key, String spec, Scope scope, int line) {
-            this(key, spec, scope, line, Set.of(), false);
+            this(key, spec, scope, line, Set.of(), false, false);
+        }
+
+        public Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly) {
+            this(key, spec, scope, line, exclusions, runtimeOnly, false);
         }
     }
 
@@ -201,7 +206,7 @@ public final class Manifest {
             throw err(v, "dependency " + e.key + " must be a version string or {\"version\": ..., \"exclude\": [...], \"runtimeOnly\": true}");
         }
         for (String k : v.members.keySet()) {
-            if (!Set.of("version", "exclude", "runtimeOnly").contains(k)) throw err(v.get(k), "unknown dependency option \"" + k + "\"");
+            if (!Set.of("version", "exclude", "runtimeOnly", "api").contains(k)) throw err(v.get(k), "unknown dependency option \"" + k + "\"");
         }
         Jsonc.Node ver = v.get("version");
         if (ver == null || !ver.isString()) throw err(v, "dependency " + e.key + " needs a \"version\" string");
@@ -220,7 +225,14 @@ public final class Manifest {
         boolean runtimeOnly = ro != null && Boolean.TRUE.equals(ro.value);
         if (ro != null && !(ro.value instanceof Boolean)) throw err(ro, "runtimeOnly must be true or false");
         if (runtimeOnly && s != Scope.RUNTIME) throw err(ro, "runtimeOnly applies to \"runtime\" dependencies only");
-        return new Dependency(key, (String) ver.value, s, ln, excl, runtimeOnly);
+        Jsonc.Node apiNode = v.get("api");
+        boolean api = apiNode != null && Boolean.TRUE.equals(apiNode.value);
+        if (apiNode != null && !(apiNode.value instanceof Boolean)) throw err(apiNode, "api must be true or false");
+        if (api && s != Scope.DEV) {
+            throw err(apiNode, "api applies to \"dev\" dependencies only" + (s == Scope.RUNTIME
+                    ? ": runtime dependencies are always passed on to consumers" : ""));
+        }
+        return new Dependency(key, (String) ver.value, s, ln, excl, runtimeOnly, api);
     }
 
     private Define parseDefine(Jsonc.Member e) {
