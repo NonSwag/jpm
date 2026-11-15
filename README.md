@@ -225,7 +225,8 @@ BOMs, exclusions, optional/provided/test scopes and relocation.
 
 **Git dependencies** go through the system `git` (so SSH keys and credential helpers work), into bare
 mirrors under `~/.jpm/git`. Versions are ranges in any of the syntaxes above matched against tags,
-exact tags, commits or `#branch`. A tag must match the version in that commit's manifest; untagged commits are versioned like
+exact tags, branches (`main`, or `#main` to say it is a branch; a tag of the same name wins over `main`) or
+commits. A tag must match the version in that commit's manifest; untagged commits are versioned like
 `1.3.0+a1b2c3d`. Git packages are built from source with the consuming project's resolved versions
 and cached in `~/.jpm/builds`, keyed by commit, patch, define values, classpath and JDK. A repository
 without a `project.jsonc` is imported from its `pom.xml` or Gradle build (see

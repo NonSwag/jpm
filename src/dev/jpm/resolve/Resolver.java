@@ -272,6 +272,12 @@ public final class Resolver {
         return kinds.get(id) == Graph.Kind.GIT ? chooseGit(id, reqs) : chooseMaven(id, reqs);
     }
 
+    /** The commit a branch requirement stands for: the locked one until updated, else the branch's newest. */
+    private String branchCommit(String id, GitRepo git, String branch, Request r) {
+        Graph.Pkg prev = previous == null ? null : previous.get(id);
+        return locked(id) && prev.tag == null && prev.commit != null && r.direct ? prev.commit : git.branchHead(branch);
+    }
+
     private Selected chooseMaven(String id, List<Request> reqs) {
         List<VersionSpec> hard = new ArrayList<>();
         List<Version> soft = new ArrayList<>();
@@ -346,9 +352,7 @@ public final class Resolver {
                 pins.add(commitSelection(key, s.substring(1), null));
                 pinReqs.add(r);
             } else if (s.startsWith("#")) {
-                String commit = locked(id) && previous.get(id).tag == null && previous.get(id).commit != null && r.direct
-                        ? previous.get(id).commit : git.branchHead(s.substring(1));
-                pins.add(commitSelection(key, commit, null));
+                pins.add(commitSelection(key, branchCommit(id, git, s.substring(1), r), null));
                 pinReqs.add(r);
             } else if (HEX.matcher(s).matches() && !VersionSpecs.looksLikeSpec(s)) {
                 String full = git.resolveCommit(s);
@@ -362,11 +366,17 @@ public final class Resolver {
                     throw new JpmException(id + " (required by " + r.from + "): " + e.getMessage());
                 }
             } else {
-                // an exact tag name
+                // an exact tag name, else a branch name ("main" is "#main" when there is no tag "main")
                 Map<String, String> tags = tags(key);
                 String commit = tags.get(s);
-                if (commit == null) throw new JpmException(id + ": tag \"" + s + "\" not found in " + key.repoKey());
-                pins.add(tagSelection(key, s, commit));
+                if (commit != null) {
+                    pins.add(tagSelection(key, s, commit));
+                } else if (git.hasBranch(s)) {
+                    pins.add(commitSelection(key, branchCommit(id, git, s, r), null));
+                } else {
+                    throw new JpmException(id + ": no tag or branch \"" + s + "\" in " + key.repoKey()
+                            + " (a version range, tag, branch or commit; #name is always a branch)");
+                }
                 pinReqs.add(r);
             }
         }

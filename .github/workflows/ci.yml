@@ -172,6 +172,31 @@ jobs:
           cp -r fixtures/gradle-demo "$work/gradle-static"
           (cd "$work/gradle-static" && "$JPM" import --static && "$JPM" build && cd app && "$JPM" start | grep -q "core,lombok,ObjectMapper")
 
+      - name: Git dependencies by tag, branch name and #branch
+        if: runner.os != 'Windows'
+        run: |
+          set -eux
+          JPM="$PWD/dist/jpm${{ matrix.exe }}"
+          base="$RUNNER_TEMP/gitbase"; rm -rf "$base" && mkdir -p "$base/me"
+          git init -q -b main "$base/me/lib" && cd "$base/me/lib"
+          git config user.email ci@example.com && git config user.name ci
+          for v in 1.0.0 1.1.0; do
+            printf '{ "name": "lib", "version": "%s" }\n' "$v" > project.jsonc
+            mkdir -p src/lib && echo "package lib; public class Lib {}" > src/lib/Lib.java
+            git add -A && git commit -qm "$v"
+            [ "$v" = 1.0.0 ] && git tag 1.0.0
+          done
+          head=$(git rev-parse --short main)
+          export JPM_GIT_BASE_GITHUB="file://$base/"
+          mkdir -p "$RUNNER_TEMP/consumer" && cd "$RUNNER_TEMP/consumer"
+          for spec in main '#main' 1.0.0; do
+            printf '{ "name": "c", "version": "1.0.0", "runtime": { "github:me/lib": "%s" } }\n' "$spec" > project.jsonc
+            rm -f project.lock && "$JPM" install
+          done
+          grep -q '"version": "1.0.0"' project.lock
+          printf '{ "name": "c", "version": "1.0.0", "runtime": { "github:me/lib": "main" } }\n' > project.jsonc
+          rm -f project.lock && "$JPM" install && grep -q "1.1.0+$head" project.lock
+
       - name: Build and run a jar-in-jar bundle
         run: |
           set -eux

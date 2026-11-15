@@ -103,6 +103,12 @@ public final class GitRepo {
         return r.out().trim();
     }
 
+    /** True if the remote has a branch with that name. */
+    public boolean hasBranch(String branch) {
+        fetch();
+        return Exec.capture(mirror, Exec.cmd("git", "rev-parse", "--verify", "--quiet", "refs/heads/" + branch + "^{commit}")).ok();
+    }
+
     /** The remote's default branch. */
     public String defaultBranch() {
         fetch();
