@@ -111,22 +111,38 @@ public final class Graph {
     }
 
     /**
-     * Transitive closure from the given root edges, honoring exclusions along each path.
-     *
-     * @param compileOnly follow only compile edges (and only compile root edges)
-     * @return package ids in breadth-first order
+     * Which edges a closure follows. COMPILE: what compiling against the roots needs (no run-time-only
+     * edges). RUNTIME: what running them needs (no compile-only edges, which the platform provides). ALL:
+     * both, for dev dependencies and tools whose whole tree goes on a compile classpath.
      */
-    public List<String> closure(Collection<Edge> roots, boolean compileOnly) {
-        return closure(roots, compileOnly, Set.of());
+    public enum Walk {
+        COMPILE, RUNTIME, ALL;
+
+        boolean follows(Edge e) {
+            return switch (this) {
+                case COMPILE -> !e.runtimeOnly;
+                case RUNTIME -> !e.compileOnly;
+                case ALL -> true;
+            };
+        }
     }
 
-    /** Like {@link #closure(Collection, boolean)}, but neither includes nor walks through the ids in {@code stop}. */
-    public List<String> closure(Collection<Edge> roots, boolean compileOnly, Set<String> stop) {
+    /**
+     * Transitive closure from the given root edges, honoring exclusions along each path.
+     *
+     * @return package ids in breadth-first order
+     */
+    public List<String> closure(Collection<Edge> roots, Walk walk) {
+        return closure(roots, walk, Set.of());
+    }
+
+    /** Like {@link #closure(Collection, Walk)}, but neither includes nor walks through the ids in {@code stop}. */
+    public List<String> closure(Collection<Edge> roots, Walk walk, Set<String> stop) {
         Map<String, List<Set<String>>> seen = new HashMap<>();
         LinkedHashSet<String> order = new LinkedHashSet<>();
         Deque<Object[]> queue = new ArrayDeque<>();
         for (Edge e : roots) {
-            if (compileOnly ? e.runtimeOnly : e.compileOnly) continue;
+            if (!walk.follows(e)) continue;
             queue.add(new Object[]{e.target, new LinkedHashSet<>(e.exclusions)});
         }
         while (!queue.isEmpty()) {
@@ -144,8 +160,7 @@ public final class Graph {
             Pkg p = pkgs.get(id);
             if (p == null) continue;
             for (Edge e : p.deps.values()) {
-                // the compile classpath skips run-time-only edges, every other classpath compile-only ones
-                if (compileOnly ? e.runtimeOnly : e.compileOnly) continue;
+                if (!walk.follows(e)) continue;
                 if (excluded(e.target, ex)) continue;
                 Set<String> next = new LinkedHashSet<>(ex);
                 next.addAll(e.exclusions);

@@ -716,13 +716,13 @@ final class Commands {
         List<Graph.Edge> devOnly = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.DEV);
         List<Graph.Edge> test = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.TEST);
         Map<String, String> scopes = new LinkedHashMap<>();
-        for (String id : c.graph.closure(runtime, true)) scopes.putIfAbsent(id, "compile");
-        for (String id : c.graph.closure(runtime, false)) scopes.putIfAbsent(id, "runtime");
-        for (String id : c.graph.closure(devOnly, false)) {
+        for (String id : c.graph.closure(runtime, Graph.Walk.COMPILE)) scopes.putIfAbsent(id, "compile");
+        for (String id : c.graph.closure(runtime, Graph.Walk.RUNTIME)) scopes.putIfAbsent(id, "runtime");
+        for (String id : c.graph.closure(devOnly, Graph.Walk.ALL)) {
             if ("runtime".equals(scopes.get(id))) scopes.put(id, "compile");
             else scopes.putIfAbsent(id, "provided");
         }
-        for (String id : c.graph.closure(test, false)) scopes.putIfAbsent(id, "test");
+        for (String id : c.graph.closure(test, Graph.Walk.ALL)) scopes.putIfAbsent(id, "test");
         List<Object> out = new ArrayList<>();
         for (Map.Entry<String, String> e : scopes.entrySet()) {
             Graph.Pkg p = c.graph.get(e.getKey());

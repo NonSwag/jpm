@@ -127,20 +127,22 @@ public final class Builder {
         List<Graph.Edge> test = Resolver.rootEdges(m, Manifest.Scope.TEST);
         List<String> ids = new ArrayList<>();
         switch (kind) {
+            // dev dependencies and processors go on a compile classpath whole: their compile-only
+            // dependencies (compileOnlyApi) are needed as much as the rest
             case COMPILE -> {
-                ids.addAll(graph.closure(runtime, true));
-                ids.addAll(graph.closure(dev, false));
+                ids.addAll(graph.closure(runtime, Graph.Walk.COMPILE));
+                ids.addAll(graph.closure(dev, Graph.Walk.ALL));
             }
-            case PROCESSOR -> ids.addAll(graph.closure(dev, false));
-            case RUNTIME -> ids.addAll(graph.closure(runtime, false));
+            case PROCESSOR -> ids.addAll(graph.closure(dev, Graph.Walk.ALL));
+            case RUNTIME -> ids.addAll(graph.closure(runtime, Graph.Walk.RUNTIME));
             case TEST_COMPILE -> {
-                ids.addAll(graph.closure(runtime, true));
-                ids.addAll(graph.closure(dev, false));
-                ids.addAll(graph.closure(test, true));
+                ids.addAll(graph.closure(runtime, Graph.Walk.COMPILE));
+                ids.addAll(graph.closure(dev, Graph.Walk.ALL));
+                ids.addAll(graph.closure(test, Graph.Walk.COMPILE));
             }
             case TEST_RUNTIME -> {
-                ids.addAll(graph.closure(runtime, false));
-                ids.addAll(graph.closure(test, false));
+                ids.addAll(graph.closure(runtime, Graph.Walk.RUNTIME));
+                ids.addAll(graph.closure(test, Graph.Walk.RUNTIME));
             }
         }
         List<Path> out = new ArrayList<>();
@@ -151,7 +153,7 @@ public final class Builder {
     /** Runtime dependency classpath without compiling the project's own modules (for scripts). */
     public List<Path> classpathNoBuild(Project.Module m) {
         List<Path> out = new ArrayList<>();
-        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), false)) {
+        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), Graph.Walk.RUNTIME)) {
             Graph.Pkg p = graph.get(id);
             if (p != null && p.kind == Graph.Kind.LOCAL) {
                 Project.Module mod = project.module(id.substring("workspace:".length()));
@@ -366,7 +368,7 @@ public final class Builder {
         Path appJar = jar(m);
         List<Path> inputs = new ArrayList<>();
         inputs.add(appJar);
-        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), false)) inputs.addAll(bundleJars(id, m));
+        for (String id : graph.closure(Resolver.rootEdges(m, Manifest.Scope.RUNTIME), Graph.Walk.RUNTIME)) inputs.addAll(bundleJars(id, m));
         inputs = Compiler.distinct(inputs);
         Map<String, String> attrs = new LinkedHashMap<>();
         if (!m.manifest.mains.isEmpty()) attrs.put("Main-Class", m.manifest.mains.getOrDefault("main", m.manifest.mains.values().iterator().next()));
@@ -398,11 +400,11 @@ public final class Builder {
         Path appJar = jar(m);
         List<Graph.Edge> roots = Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
         Set<String> isolated = new java.util.TreeSet<>();
-        for (String id : graph.closure(roots, false)) {
+        for (String id : graph.closure(roots, Graph.Walk.RUNTIME)) {
             Graph.Pkg p = graph.get(id);
             if (p != null && isolatedPkg(p)) isolated.add(id);
         }
-        List<String> shared = graph.closure(roots, false, isolated);
+        List<String> shared = graph.closure(roots, Graph.Walk.RUNTIME, isolated);
 
         Path stage = m.cacheDir().resolve("bundle");
         Fs.deleteTree(stage);
@@ -430,7 +432,7 @@ public final class Builder {
             Set<String> otherIsolated = new java.util.TreeSet<>(isolated);
             otherIsolated.remove(iso);
             List<String> own = new ArrayList<>();
-            for (String x : graph.closure(List.of(new Graph.Edge(iso, false, Set.of())), false, otherIsolated)) {
+            for (String x : graph.closure(List.of(new Graph.Edge(iso, false, Set.of())), Graph.Walk.RUNTIME, otherIsolated)) {
                 if (!sharedSet.contains(x)) own.add(x);
             }
             // the API it implements: packages of the modules that pull it in, loaded from the shared loader
@@ -549,7 +551,8 @@ public final class Builder {
             List<Graph.Edge> self = List.of(new Graph.Edge(p.id, false, Set.of()));
             List<Path> cp = new ArrayList<>();
             cp.add(jar);
-            for (String id : graph.closure(self, false)) if (!id.equals(p.id)) cp.addAll(paths(id, consumer));
+            // compiling: everything the patched package was compiled against
+            for (String id : graph.closure(self, Graph.Walk.ALL)) if (!id.equals(p.id)) cp.addAll(paths(id, consumer));
             Jdk jdk = consumer != null ? jdk(consumer.manifest) : Toolchain.require(JavaSpec.any());
             int release = Math.max(8, Math.min(jdk.major(), classRelease(jar)));
             Path srcRoot = out.getParent().resolve("changed");
@@ -625,7 +628,7 @@ public final class Builder {
             // Compile classpath from this project's graph, so versions agree with ours.
             List<Graph.Edge> edges = new ArrayList<>(p.deps.values());
             List<Path> cp = new ArrayList<>();
-            for (String id : graph.closure(edges, true)) cp.addAll(paths(id, null));
+            for (String id : graph.closure(edges, Graph.Walk.COMPILE)) cp.addAll(paths(id, null));
             List<Path> proc = List.of();
             List<Manifest.Dependency> devDeps = mod.manifest().deps(Manifest.Scope.DEV);
             if (!devDeps.isEmpty()) {
@@ -708,18 +711,19 @@ public final class Builder {
                 Log.debug("ignoring lockfile of " + p.id + ": " + e.getMessage());
             }
         }
-        return resolveTool(roots, prev);
+        // a Git package's dev dependencies are its compile classpath, with their compile-only dependencies
+        return resolveTool(roots, prev, Graph.Walk.ALL);
     }
 
-    /** Resolves and fetches a standalone set of dependencies, returning their jars. */
-    public List<Path> resolveTool(List<Resolver.Root> roots, Graph prev) {
+    /** Resolves and fetches a standalone set of dependencies, returning their jars as {@code walk} reaches them. */
+    public List<Path> resolveTool(List<Resolver.Root> roots, Graph prev, Graph.Walk walk) {
         Graph g = new Resolver(roots, repo, prev).resolve();
         Install.fetch(g, repo);
         List<Graph.Edge> edges = new ArrayList<>();
         for (Resolver.Root r : roots) edges.add(new Graph.Edge(Resolver.idOf(r.key()), false, Set.of()));
         Builder sub = new Builder(project, g, repo, Env.Mode.PRODUCTION);
         List<Path> out = new ArrayList<>();
-        for (String id : g.closure(edges, false)) out.addAll(sub.paths(id, null));
+        for (String id : g.closure(edges, walk)) out.addAll(sub.paths(id, null));
         return out;
     }
 }

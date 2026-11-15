@@ -56,6 +56,46 @@ class GradleMetadataTest {
                 + "</version><scope>compile</scope></dependency>";
     }
 
+    /** The other way round: a dev dependency's tree goes on the compile classpath with its compile-only parts. */
+    @Test
+    void devDependenciesKeepTheirCompileOnlyApiDependencies(@TempDir Path tmp) throws IOException {
+        System.setProperty("jpm.home", tmp.resolve("home").toString());
+        Path repo = tmp.resolve("repo");
+        publish(repo, "org.jetbrains", "annotations", "26.1.0", "", null, "org/jetbrains/annotations/NotNull.class");
+        String adventureModule = """
+                { "formatVersion": "1.1", "variants": [
+                    { "name": "apiElements", "attributes": { "org.gradle.category": "library", "org.gradle.usage": "java-api" },
+                      "dependencies": [ { "group": "org.jetbrains", "module": "annotations", "version": { "requires": "26.1.0" } } ] },
+                    { "name": "runtimeElements", "attributes": { "org.gradle.category": "library", "org.gradle.usage": "java-runtime" } } ] }
+                """;
+        publish(repo, "net.kyori", "adventure-api", "5.2.0", dep("org.jetbrains", "annotations", "26.1.0"), adventureModule, "net/kyori/Adventure.class");
+        publish(repo, "io.papermc.paper", "paper-api", "26.3", dep("net.kyori", "adventure-api", "5.2.0"), null, "org/bukkit/Bukkit.class");
+
+        Path project = tmp.resolve("lobby");
+        Fs.write(project.resolve("project.jsonc"), "{ \"name\": \"lobby\", \"version\": \"0.1.0\", \"java\": \"21\","
+                + " \"repositories\": [" + dev.jpm.json.Jsonc.quote(repo.toUri().toString()) + "],"
+                + " \"dev\": { \"io.papermc.paper:paper-api\": \"26.3\" } }");
+        Fs.write(project.resolve("src/l/Lobby.java"), "package l; public class Lobby {}");
+        Project p = Project.load(project);
+        MavenRepo mr = new MavenRepo(p.root.repositories);
+        Graph g = Install.run(p, mr, new Install.Options(false, true, Set.of(), true));
+        assertTrue(g.get("net.kyori:adventure-api").deps.get("org.jetbrains:annotations").compileOnly());
+
+        Builder b = new Builder(p, g, mr, dev.jpm.build.Env.Mode.PRODUCTION);
+        List<String> compile = b.classpath(p.modules.get(0), Builder.Cp.COMPILE).stream().map(x -> x.getFileName().toString()).toList();
+        assertTrue(compile.contains("annotations-26.1.0.jar"), "a dev dependency's compile-only dependency is on the compile classpath: " + compile);
+        List<String> processor = b.classpath(p.modules.get(0), Builder.Cp.PROCESSOR).stream().map(x -> x.getFileName().toString()).toList();
+        assertTrue(processor.contains("annotations-26.1.0.jar"));
+
+        // the same for a Git package's dev dependencies, which are resolved like a tool
+        List<String> tool = b.resolveTool(List.of(new Resolver.Root("test", dev.jpm.DepKey.maven("io.papermc.paper", "paper-api"), "26.3", Set.of())),
+                null, Graph.Walk.ALL).stream().map(x -> x.getFileName().toString()).toList();
+        assertTrue(tool.contains("annotations-26.1.0.jar"), tool.toString());
+        List<String> runtimeTool = b.resolveTool(List.of(new Resolver.Root("test", dev.jpm.DepKey.maven("io.papermc.paper", "paper-api"), "26.3", Set.of())),
+                null, Graph.Walk.RUNTIME).stream().map(x -> x.getFileName().toString()).toList();
+        assertFalse(runtimeTool.contains("annotations-26.1.0.jar"));
+    }
+
     @Test
     void compileOnlyApiDependenciesStayOutAtRunTime(@TempDir Path tmp) throws IOException {
         System.setProperty("jpm.home", tmp.resolve("home").toString());
@@ -93,9 +133,9 @@ class GradleMetadataTest {
         assertFalse(g.get("net.thenextlvl:i18n").deps.get("org.example:util").compileOnly());
 
         var roots = Resolver.rootEdges(p.modules.get(0), dev.jpm.Manifest.Scope.RUNTIME);
-        assertTrue(g.closure(roots, true).contains("net.kyori:adventure-api"), "on the compile classpath");
-        assertFalse(g.closure(roots, false).contains("net.kyori:adventure-api"), "not on the runtime classpath");
-        assertTrue(g.closure(roots, false).contains("org.example:util"));
+        assertTrue(g.closure(roots, Graph.Walk.COMPILE).contains("net.kyori:adventure-api"), "on the compile classpath");
+        assertFalse(g.closure(roots, Graph.Walk.RUNTIME).contains("net.kyori:adventure-api"), "not on the runtime classpath");
+        assertTrue(g.closure(roots, Graph.Walk.RUNTIME).contains("org.example:util"));
 
         // the lockfile keeps it
         Graph locked = Lockfile.read(p.lockFile()).graph;

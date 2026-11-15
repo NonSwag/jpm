@@ -34,7 +34,7 @@ public final class TestRunner {
                     + Resolver.JUNIT_JUPITER + " to \"test\".");
         }
         List<Path> launcher = b.resolveTool(List.of(new Resolver.Root("jpm test runner",
-                DepKey.maven("org.junit.platform", "junit-platform-console"), platform)), null);
+                DepKey.maven("org.junit.platform", "junit-platform-console"), platform)), null, dev.jpm.resolve.Graph.Walk.RUNTIME);
         List<Path> full = new ArrayList<>(cp);
         full.addAll(launcher);
         Jdk jdk = b.jdk(m.manifest);
@@ -64,7 +64,7 @@ public final class TestRunner {
     private static String platformVersion(Graph g, Project.Module m) {
         List<Graph.Edge> roots = new ArrayList<>(Resolver.rootEdges(m, dev.jpm.Manifest.Scope.TEST));
         roots.addAll(Resolver.rootEdges(m, dev.jpm.Manifest.Scope.RUNTIME));
-        for (String id : g.closure(roots, false)) {
+        for (String id : g.closure(roots, dev.jpm.resolve.Graph.Walk.ALL)) {
             if (id.equals("org.junit.platform:junit-platform-engine")) return g.get(id).version;
         }
         return null;

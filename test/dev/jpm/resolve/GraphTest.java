@@ -35,10 +35,10 @@ class GraphTest {
         pkg(g, "c:c");
         pkg(g, "d:d");
         List<Graph.Edge> roots = List.of(new Graph.Edge("a:a", false, Set.of()));
-        assertEquals(List.of("a:a", "b:b", "c:c", "d:d"), g.closure(roots, false));
-        assertEquals(List.of("a:a", "b:b", "d:d"), g.closure(roots, true));
+        assertEquals(List.of("a:a", "b:b", "c:c", "d:d"), g.closure(roots, Graph.Walk.RUNTIME));
+        assertEquals(List.of("a:a", "b:b", "d:d"), g.closure(roots, Graph.Walk.COMPILE));
         List<Graph.Edge> excl = List.of(new Graph.Edge("a:a", false, Set.of("d:*")));
-        assertEquals(List.of("a:a", "b:b", "c:c"), g.closure(excl, false));
+        assertEquals(List.of("a:a", "b:b", "c:c"), g.closure(excl, Graph.Walk.RUNTIME));
     }
 
     @Test
@@ -48,7 +48,7 @@ class GraphTest {
         pkg(g, "b:b", "x:x");
         pkg(g, "x:x");
         List<Graph.Edge> roots = List.of(new Graph.Edge("a:a", false, Set.of("x:x")), new Graph.Edge("b:b", false, Set.of()));
-        assertTrue(g.closure(roots, false).contains("x:x"));
+        assertTrue(g.closure(roots, Graph.Walk.RUNTIME).contains("x:x"));
     }
 
     @Test
