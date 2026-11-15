@@ -654,6 +654,10 @@ public final class GradleImport {
                     target.put(k, MavenImport.depValue(version, d.excludes(), conf.equals("runtimeOnly"), conf.equals("compileOnlyApi")));
                 }
             }
+            // implementation plus testImplementation or compileOnly of one dependency: the runtime entry covers
+            // both (compileOnly plus testImplementation stays in dev and test)
+            dev.keySet().removeAll(runtime.keySet());
+            test.keySet().removeAll(runtime.keySet());
             if (!runtime.isEmpty()) man.put("runtime", runtime);
             if (!dev.isEmpty()) man.put("dev", dev);
             if (!test.isEmpty()) man.put("test", test);

@@ -149,7 +149,9 @@ resolved into the exact versions they stood for, so the build is reproducible wi
 | `rootProject.name`, `group`, `version` | `name`, `group`, `version` |
 | `api`, `implementation` | `"runtime"` |
 | `runtimeOnly` | `"runtime"` with `"runtimeOnly": true` |
-| `compileOnly`, `compileOnlyApi`, `annotationProcessor` | `"dev"` (`compileOnlyApi` is not visible to consumers in jpm) |
+| `compileOnly`, `annotationProcessor` | `"dev"` |
+| `compileOnlyApi` | `"dev"` with `"api": true` |
+| `compileOnly` and `testImplementation` of one dependency | in both `"dev"` and `"test"` |
 | `testImplementation`, `testCompileOnly`, `testRuntimeOnly` | `"test"` |
 | `implementation(project(":core"))` | `"workspace:core": "*"` |
 | `platform(...)`, `enforcedPlatform(...)` | resolved into exact versions on import |

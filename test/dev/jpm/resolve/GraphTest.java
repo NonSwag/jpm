@@ -134,8 +134,8 @@ class GraphTest {
                 "{\n  \"name\": \"x\",\n  \"runtime\": {\n    \"guava\": \"1\"\n  }\n}"));
         assertTrue(e.getMessage().contains("project.jsonc:4"), e.getMessage());
         JpmException dup = assertThrows(JpmException.class, () -> Manifest.parse(Path.of("project.jsonc"),
-                "{ \"name\": \"x\", \"runtime\": { \"a:b\": \"1\" }, \"test\": { \"a:b\": \"1\" } }"));
-        assertTrue(dup.getMessage().contains("both"), dup.getMessage());
+                "{ \"name\": \"x\", \"runtime\": { \"a:b\": \"1\" },\n \"dev\": { \"a:b\": \"2\" } }"));
+        assertTrue(dup.getMessage().contains("project.jsonc:2:") && dup.getMessage().contains("different versions"), dup.getMessage());
         JpmException unknown = assertThrows(JpmException.class, () -> Manifest.parse(Path.of("project.jsonc"),
                 "{ \"name\": \"x\",\n \"dependencies\": {} }"));
         assertTrue(unknown.getMessage().contains(":2: unknown field"), unknown.getMessage());

@@ -3,14 +3,18 @@ package dev.jpm;
 import dev.jpm.json.Jsonc;
 import dev.jpm.util.Fs;
 import dev.jpm.util.JpmException;
+import dev.jpm.util.Log;
 
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 
@@ -143,14 +147,7 @@ public final class Manifest {
                 deps.add(dependency(key, e, s));
             }
         }
-        Map<DepKey, Scope> seen = new TreeMap<>();
-        for (Dependency d : deps) {
-            Scope prev = seen.put(d.key, d.scope);
-            if (prev != null) {
-                throw new JpmException(file + ":" + d.line + ": " + d.key + " is declared in both \"" + prev.key + "\" and \"" + d.scope.key + "\"");
-            }
-        }
-        this.dependencies = deps;
+        this.dependencies = dedupe(file, deps);
 
         Map<String, Define> defs = new LinkedHashMap<>();
         Map<String, Map<String, Object>> libDefs = new LinkedHashMap<>();
@@ -348,6 +345,57 @@ public final class Manifest {
             }
         }
         return javaMajor();
+    }
+
+    /**
+     * A dependency may be declared in more than one scope where that means something; one project resolves a
+     * package to one version, so the entries must agree on it.
+     * <ul>
+     *   <li>dev + test: a compile-time-only dependency that tests also run with (a platform API under a mock
+     *       server). Both are kept; their versions must match.</li>
+     *   <li>runtime + test: the test entry adds nothing, since tests have every runtime dependency. A warning; the
+     *       runtime entry is used.</li>
+     *   <li>runtime + dev: with the same version the dev entry adds nothing (a warning); with another version
+     *       it contradicts the runtime one (an error).</li>
+     * </ul>
+     */
+    private static List<Dependency> dedupe(Path file, List<Dependency> deps) {
+        Map<DepKey, Map<Scope, Dependency>> byKey = new TreeMap<>();
+        for (Dependency d : deps) byKey.computeIfAbsent(d.key, k -> new EnumMap<>(Scope.class)).put(d.scope, d);
+        Set<Dependency> drop = new HashSet<>();
+        for (Map<Scope, Dependency> scopes : byKey.values()) {
+            if (scopes.size() < 2) continue;
+            Dependency runtime = scopes.get(Scope.RUNTIME), dev = scopes.get(Scope.DEV), test = scopes.get(Scope.TEST);
+            if (runtime != null && dev != null) {
+                if (!sameVersion(runtime, dev)) {
+                    throw new JpmException(file + ":" + dev.line + ": " + dev.key + " is declared in \"runtime\" (" + runtime.spec
+                            + ") and in \"dev\" (" + dev.spec + ") with different versions; runtime dependencies are on the"
+                            + " compile classpath already, so remove the \"dev\" entry");
+                }
+                Log.warn(file + ":" + dev.line + ": " + dev.key + " is in \"runtime\" and \"dev\"; runtime dependencies are on"
+                        + " the compile classpath already, so the \"dev\" entry is ignored. Remove it");
+                drop.add(dev);
+                dev = null;
+            }
+            if (runtime != null && test != null) {
+                Log.warn(file + ":" + test.line + ": " + test.key + " is in \"runtime\" and \"test\"; tests have every runtime"
+                        + " dependency already, so the \"test\" entry is ignored"
+                        + (sameVersion(runtime, test) ? "" : " and " + runtime.spec + " is used, not " + test.spec) + ". Remove it");
+                drop.add(test);
+            } else if (dev != null && test != null && !sameVersion(dev, test)) {
+                throw new JpmException(file + ":" + test.line + ": " + test.key + " is declared in \"dev\" (" + dev.spec
+                        + ") and in \"test\" (" + test.spec + ") with different versions; a project uses one version of a"
+                        + " package, so give both the same");
+            }
+        }
+        if (drop.isEmpty()) return deps;
+        List<Dependency> kept = new ArrayList<>(deps);
+        kept.removeIf(drop::contains);
+        return kept;
+    }
+
+    private static boolean sameVersion(Dependency a, Dependency b) {
+        return Objects.equals(a.spec == null ? null : a.spec.strip(), b.spec == null ? null : b.spec.strip());
     }
 
     public List<Dependency> deps(Scope s) {

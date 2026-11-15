@@ -315,6 +315,7 @@ final class Commands {
             }
             MavenRepo repo = new MavenRepo(p.root.repositories);
             String src = Fs.read(moduleFile);
+            List<Manifest.Dependency> declared = m.manifest.dependencies;
             for (String a : args) {
                 DepArg d = parseDepArg(a);
                 if (d.key.isWorkspace() && p.module(d.key.artifact()) == null) {
@@ -328,8 +329,16 @@ final class Commands {
                         throw new JpmException(e.getMessage());
                     }
                 }
+                // adding to a scope moves the dependency there, except that dev and test may share it (a
+                // compile-only dependency tests run with); the other entry then gets the same version
+                Manifest.Scope pair = scope == Manifest.Scope.DEV ? Manifest.Scope.TEST : scope == Manifest.Scope.TEST ? Manifest.Scope.DEV : null;
                 for (Manifest.Scope s : Manifest.Scope.values()) {
-                    if (s != scope) src = JsoncEdit.remove(src, List.of(s.key), d.key.toString());
+                    if (s == scope) continue;
+                    if (s == pair && declared.stream().anyMatch(x -> x.key().equals(d.key) && x.scope() == pair)) {
+                        src = setSpec(src, s.key, d.key.toString(), spec);
+                    } else {
+                        src = JsoncEdit.remove(src, List.of(s.key), d.key.toString());
+                    }
                 }
                 src = JsoncEdit.set(src, List.of(scope.key), d.key.toString(), Jsonc.quote(spec));
                 Log.step("Adding", d.key + " " + spec + (scope == Manifest.Scope.RUNTIME ? "" : " (" + scope.key + ")"));
@@ -344,6 +353,15 @@ final class Commands {
             throw new JpmException(msg + "\n" + Manifest.FILE + " was left unchanged.", e);
         }
         return 0;
+    }
+
+    /** Sets a declared dependency's version, inside its options object when it has one. */
+    private static String setSpec(String src, String scope, String key, String spec) {
+        Jsonc.Node scopeNode = Jsonc.parseNode(src).get(scope);
+        Jsonc.Node value = scopeNode == null ? null : scopeNode.get(key);
+        return value != null && value.isObject()
+                ? JsoncEdit.set(src, List.of(scope, key), "version", Jsonc.quote(spec))
+                : JsoncEdit.set(src, List.of(scope), key, Jsonc.quote(spec));
     }
 
     int remove(List<String> args) {

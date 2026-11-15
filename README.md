@@ -175,6 +175,13 @@ What reaches the projects and modules that depend on this one, like Gradle's con
 `"api": true` is for APIs a platform provides, such as a server API that consumers' code uses too. Published
 with jpm-publish, it is in the Gradle Module Metadata (compile only) and `provided` in the POM.
 
+A dependency can be in both `dev` and `test`, with the same version: compiled against, run with in tests,
+not shipped. Use this for a platform API that tests run against, like Gradle's `compileOnly` plus
+`testImplementation`. `jpm add --dev` and `jpm add --test` keep the other entry and give it the same version.
+A `runtime` dependency in `test` too is ignored there, with a warning, since tests have every runtime
+dependency already. In `dev` too, it is ignored with a warning when the versions match and is an error
+when they do not.
+
 Exclusions apply to everything the dependency brings in, as in Maven. `jpm add g:a:classifier@1.0` adds a
 classified jar.
 
