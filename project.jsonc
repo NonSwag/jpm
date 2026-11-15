@@ -9,7 +9,7 @@
   "defineClass": "dev.jpm.BuildConfig",
   "runtime": {},
   "test": {
-    "org.junit.jupiter:junit-jupiter": "5.11.4"
+    "org.junit.jupiter:junit-jupiter": "[6.0.0,)"
   },
   "nativeArgs": [
     "-O2",
