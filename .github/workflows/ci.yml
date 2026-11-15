@@ -12,10 +12,17 @@ permissions:
   contents: read
 
 jobs:
-  # Runs first: a release tag that does not match the version stops the run before anything is built.
+  # Runs first and decides what this run publishes (outputs.kind):
+  #   release  a version tag was pushed, or the main branch has a version that has no tag yet
+  #   canary   any other push to the main branch: <version>-<commit>
+  #   none     pull requests and other branches
+  # A pushed tag that does not match the version stops the run before anything is built.
   version:
     name: version
     runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.decide.outputs.kind }}
+      version: ${{ steps.decide.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - name: Check the project.jsonc schema
@@ -33,6 +40,27 @@ jobs:
             exit 1
           fi
           echo "Releasing $version"
+
+      - name: Decide between a release and a canary build
+        id: decide
+        run: |
+          version=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
+          kind=none
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            kind=release
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = "refs/heads/${{ github.event.repository.default_branch }}" ]; then
+            # a new version (no tag for it yet) is released; plain versions only, not 1.0.0-rc1 and the like
+            if ! git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null && \
+               printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              kind=release
+              echo "::notice::$version has no release yet: releasing it"
+            else
+              kind=canary
+            fi
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "This run: $kind ($version)"
 
   build:
     name: ${{ matrix.name }}
@@ -59,7 +87,7 @@ jobs:
 
       # Every commit on the main branch is released as a canary build, versioned <version>-<commit>.
       - name: Stamp the canary version
-        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: needs.version.outputs.kind == 'canary'
         run: |
           v=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
           canary="$v-${GITHUB_SHA::7}"
@@ -264,11 +292,17 @@ jobs:
 
   release:
     name: release
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    if: needs.version.outputs.kind == 'release'
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: release-${{ needs.version.outputs.version }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -277,20 +311,32 @@ jobs:
           path: artifacts
 
       - name: Assemble release files
-        run: .github/release-files.sh "$GITHUB_REF_NAME"
+        run: .github/release-files.sh "$VERSION"
 
       - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --title "jpm $GITHUB_REF_NAME" --generate-notes
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "::notice::$VERSION is already released"
+            exit 0
+          fi
+          # creates the tag on this commit when the release was started by a version change
+          gh release create "$VERSION" release/* --target "$GITHUB_SHA" --title "jpm $VERSION" --generate-notes
+
+      - name: Point the canary release at it
+        # the newest build is this release, so `jpm upgrade --canary` installs it too
+        run: |
+          printf '%s\n' "$VERSION" > VERSION
+          gh release view canary >/dev/null 2>&1 || gh release create canary --prerelease --title "jpm canary" \
+            --notes "Names the newest canary build in VERSION, for \`jpm upgrade --canary\`. The builds themselves are the <version>-<commit> prereleases."
+          gh release upload canary VERSION --clobber
 
   # A prerelease for every commit on the main branch, tagged <version>-<commit>. The release tagged
   # "canary" holds a VERSION file naming the newest one, which `jpm upgrade --canary` reads. Prereleases
   # never become releases/latest, so stable installs and upgrades are not affected.
   canary:
     name: canary
-    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    needs: build
+    if: needs.version.outputs.kind == 'canary'
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -35,7 +35,8 @@ Open a new terminal afterwards. `JPM_VERSION=0.3.0` installs that version instea
 refreshes the shims. `jpm upgrade --check` only reports; `jpm upgrade 0.3.0` installs a given version.
 
 **Canary builds:** every commit on the main branch that passes CI is released as a prerelease tagged
-`<version>-<commit>` (e.g. `0.5.0-3ff03ab`, the version of the release it follows). `jpm upgrade --canary`
+`<version>-<commit>` (e.g. `0.5.0-3ff03ab`, the version of the release it follows), except the commit that
+changes the version, which is released. `jpm upgrade --canary`
 installs the newest one, and again when there is a newer commit; `jpm upgrade` from a canary build moves to
 the next release once there is one, and `jpm upgrade <version>` goes back to a release. The install
 scripts install a canary with `JPM_VERSION=canary`. The newest ten canaries are kept.
@@ -43,9 +44,12 @@ scripts install a canary with `JPM_VERSION=canary`. The newest ten canaries are 
 `jpm version` says when a newer release is out, and on a canary build also when a newer canary is (on
 stderr, after the version, so scripts reading the version are unaffected).
 
-**Releases** are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64) when a version
-tag such as `0.3.0` is pushed (no `v` prefix). The tag must match the version in `project.jsonc`, and
-nothing is published unless every platform passes.
+**Releases** are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64). To release,
+change `"version"` in `project.jsonc` and push to the main branch: a version that has no release yet is
+tagged (plain, no `v` prefix) and released by that run, instead of a canary build. Pushing a tag such as
+`0.3.0` yourself works too; it must match the version in `project.jsonc`. Nothing is published unless
+every platform passes, and a version is never released twice. Versions like `1.0.0-rc1` are not released
+automatically; tag them to release them.
 
 ## Getting started
 
