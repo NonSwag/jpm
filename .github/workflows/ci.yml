@@ -52,8 +52,20 @@ jobs:
         shell: bash
     env:
       JPM_HOME: ${{ github.workspace }}/../jpm-home
+      # smoke tests run jpm --version a lot; they should not ask GitHub for newer versions each time
+      JPM_NO_UPDATE_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
+
+      # Every commit on the main branch is released as a canary build, versioned <version>-<commit>.
+      - name: Stamp the canary version
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          v=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
+          canary="$v-${GITHUB_SHA::7}"
+          perl -pi -e 'if (!$done && s/"version": "\Q'"$v"'\E"/"version": "'"$canary"'"/) { $done = 1 }' project.jsonc
+          grep -q "\"version\": \"$canary\"" project.jsonc
+          echo "Canary build $canary"
 
       - uses: graalvm/setup-graalvm@v1
         with:
@@ -265,21 +277,62 @@ jobs:
           path: artifacts
 
       - name: Assemble release files
-        run: |
-          set -eux
-          mkdir release
-          for d in artifacts/jpm-*; do
-            platform="${d#artifacts/jpm-}"
-            for f in "$d"/*; do
-              case "$f" in *.exe) cp "$f" "release/jpm-$platform.exe" ;; *) cp "$f" "release/jpm-$platform" ;; esac
-            done
-          done
-          cp install.sh install.ps1 schema/project.schema.json release/
-          # `jpm upgrade` reads the latest version from this file
-          printf '%s\n' "$GITHUB_REF_NAME" > release/VERSION
-          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
+        run: .github/release-files.sh "$GITHUB_REF_NAME"
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" release/* --title "jpm $GITHUB_REF_NAME" --generate-notes
+
+  # A prerelease for every commit on the main branch, tagged <version>-<commit>. The release tagged
+  # "canary" holds a VERSION file naming the newest one, which `jpm upgrade --canary` reads. Prereleases
+  # never become releases/latest, so stable installs and upgrades are not affected.
+  canary:
+    name: canary
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: canary
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble release files
+        run: |
+          v=$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' project.jsonc | head -n 1)
+          echo "CANARY=$v-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          .github/release-files.sh "$v-${GITHUB_SHA::7}"
+
+      - name: Publish the canary build
+        run: |
+          if gh release view "$CANARY" >/dev/null 2>&1; then
+            echo "$CANARY is already released"
+          else
+            gh release create "$CANARY" release/* --prerelease --target "$GITHUB_SHA" --title "jpm $CANARY (canary)" \
+              --notes "Canary build of $GITHUB_SHA on ${{ github.event.repository.default_branch }}. Install it with \`jpm upgrade --canary\` or \`JPM_VERSION=canary\` for the install script."
+          fi
+
+      - name: Point the canary release at it
+        run: |
+          printf '%s\n' "$CANARY" > VERSION
+          gh release view canary >/dev/null 2>&1 || gh release create canary --prerelease --title "jpm canary" \
+            --notes "Names the newest canary build in VERSION, for \`jpm upgrade --canary\`. The builds themselves are the <version>-<commit> prereleases."
+          gh release upload canary VERSION --clobber
+
+      - name: Keep the newest ten canary builds
+        run: |
+          gh release list --limit 200 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("^[0-9][^ ]*-[0-9a-f]{7}$")))] | sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
+          while read -r tag; do
+            echo "Deleting old canary $tag"
+            gh release delete "$tag" --cleanup-tag --yes
+          done

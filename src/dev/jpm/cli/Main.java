@@ -56,7 +56,8 @@ public final class Main {
               start --trace               Run under the native-image tracing agent to record its config
 
             Maintenance
-              upgrade [version]           Upgrade jpm to the latest release (--check only reports)
+              upgrade [version]           Upgrade jpm to the latest release (--check only reports,
+                                          --canary installs the newest build of the main branch)
 
             Any other command runs an extension: `jpm format` runs `jpm-format`.
             Global options: -v/--verbose, --offline
@@ -145,7 +146,7 @@ public final class Main {
             if (a.equals("-v") || a.equals("--verbose")) { Log.verbose = true; args.remove(0); }
             else if (a.equals("--offline")) { System.setProperty("jpm.offline", "true"); args.remove(0); }
             else if (a.equals("-h") || a.equals("--help")) { System.out.print(HELP.formatted(VERSION)); return 0; }
-            else if (a.equals("--version")) { System.out.println("jpm " + VERSION); return 0; }
+            else if (a.equals("--version")) return Upgrade.version();
             else break;
         }
         args.removeIf(a -> {
@@ -160,7 +161,7 @@ public final class Main {
         Commands c = new Commands();
         return switch (cmd) {
             case "help" -> { System.out.print(HELP.formatted(VERSION)); yield 0; }
-            case "version" -> { System.out.println("jpm " + VERSION); yield 0; }
+            case "version" -> Upgrade.version();
             case "upgrade", "self-update" -> Upgrade.run(args);
             case "init" -> c.init(args);
             case "add" -> c.add(args);

@@ -34,6 +34,15 @@ Open a new terminal afterwards. `JPM_VERSION=0.3.0` installs that version instea
 **Upgrading:** `jpm upgrade` replaces jpm with the latest release (checksum-verified, in place) and
 refreshes the shims. `jpm upgrade --check` only reports; `jpm upgrade 0.3.0` installs a given version.
 
+**Canary builds:** every commit on the main branch that passes CI is released as a prerelease tagged
+`<version>-<commit>` (e.g. `0.5.0-3ff03ab`, the version of the release it follows). `jpm upgrade --canary`
+installs the newest one, and again when there is a newer commit; `jpm upgrade` from a canary build moves to
+the next release once there is one, and `jpm upgrade <version>` goes back to a release. The install
+scripts install a canary with `JPM_VERSION=canary`. The newest ten canaries are kept.
+
+`jpm version` says when a newer release is out, and on a canary build also when a newer canary is (on
+stderr, after the version, so scripts reading the version are unaffected).
+
 **Releases** are built by CI for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64) when a version
 tag such as `0.3.0` is pushed (no `v` prefix). The tag must match the version in `project.jsonc`, and
 nothing is published unless every platform passes.
@@ -77,7 +86,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
 | `run <script> [args]` | Run a script from `scripts` (no shorthand) |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
-| `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports) |
+| `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports, `--canary` installs the newest build of the main branch) |
 | `help`, `--version` | Show the commands, or jpm's version |
 | `java list [--available [vendor]]` | Installed JDKs (`*` marks what `java` runs here), or what can be installed |
 | `java install <java>`, `java remove <java>` | Install into / remove from `~/.jpm/jdks` |
@@ -356,6 +365,7 @@ jar and is picked up by native-image automatically.
 | `JPM_VERBOSE`, `-v` | Show what jpm runs and downloads |
 | `JPM_COLOR=1`, `NO_COLOR` | Force colored output where it is shown in color but is not a terminal (IDE consoles), or turn colors off |
 | `JPM_NO_INSTALL` | Never install JDKs automatically |
+| `JPM_NO_UPDATE_CHECK` | `jpm version` does not look for a newer jpm |
 | `JPM_JAVA` | JDK for the `java` shims in this shell, e.g. `21` |
 | `JPM_JVM_ARGS` | JVM options for `jpm start` and `jpm dev` |
 | `JPM_BUNDLE_CACHE` | Where bundles unpack their nested jars (default: the temp directory) |
