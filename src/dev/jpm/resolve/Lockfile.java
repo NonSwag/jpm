@@ -40,8 +40,18 @@ public final class Lockfile {
         if (!(v instanceof BigDecimal bd) || bd.intValue() != VERSION) {
             throw new JpmException(file + " has an unsupported lockfileVersion. Delete it and run `jpm install`.");
         }
+        Graph g = readPackages(root.get("packages"));
+        if (root.get("isolated") instanceof Map<?, ?> iso) {
+            for (Map.Entry<?, ?> e : iso.entrySet()) {
+                Object pk = e.getValue() instanceof Map<?, ?> im ? im.get("packages") : null;
+                g.isolated.put((String) e.getKey(), readPackages(pk));
+            }
+        }
+        return new Lockfile((String) root.get("inputs"), g);
+    }
+
+    private static Graph readPackages(Object pkgs) {
         Graph g = new Graph();
-        Object pkgs = root.get("packages");
         if (pkgs instanceof Map<?, ?> m) {
             for (Map.Entry<?, ?> e : m.entrySet()) {
                 String id = (String) e.getKey();
@@ -62,7 +72,7 @@ public final class Lockfile {
                 g.put(p);
             }
         }
-        return new Lockfile((String) root.get("inputs"), g);
+        return g;
     }
 
     public String render() {
@@ -71,7 +81,26 @@ public final class Lockfile {
         sb.append("{\n");
         sb.append("  \"lockfileVersion\": ").append(VERSION).append(",\n");
         sb.append("  \"inputs\": ").append(Jsonc.quote(inputs)).append(",\n");
-        sb.append("  \"packages\": {");
+        sb.append("  \"packages\": ");
+        packages(sb, graph, "  ");
+        if (!graph.isolated.isEmpty()) {
+            sb.append(",\n  \"isolated\": {");
+            int n = 0;
+            for (Map.Entry<String, Graph> e : graph.isolated.entrySet()) {
+                sb.append(n++ == 0 ? "\n" : ",\n");
+                sb.append("    ").append(Jsonc.quote(e.getKey())).append(": { \"packages\": ");
+                packages(sb, e.getValue(), "    ");
+                sb.append(" }");
+            }
+            sb.append("\n  }");
+        }
+        sb.append("\n");
+        sb.append("}\n");
+        return sb.toString();
+    }
+
+    private static void packages(StringBuilder sb, Graph graph, String indent) {
+        sb.append("{");
         List<Graph.Pkg> pkgs = graph.pkgs.values().stream().filter(p -> p.kind != Graph.Kind.LOCAL).toList();
         for (int i = 0; i < pkgs.size(); i++) {
             Graph.Pkg p = pkgs.get(i);
@@ -87,11 +116,9 @@ public final class Lockfile {
                 entry.put("dependencies", deps);
             }
             sb.append(i == 0 ? "\n" : ",\n");
-            sb.append("    ").append(Jsonc.quote(p.id)).append(": ").append(inline(entry));
+            sb.append(indent).append("  ").append(Jsonc.quote(p.id)).append(": ").append(inline(entry));
         }
-        sb.append(pkgs.isEmpty() ? "}\n" : "\n  }\n");
-        sb.append("}\n");
-        return sb.toString();
+        sb.append(pkgs.isEmpty() ? "}" : "\n" + indent + "}");
     }
 
     private static String inline(Object v) {

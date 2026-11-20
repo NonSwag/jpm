@@ -46,12 +46,26 @@ public final class Builder {
     private final Map<String, List<Path>> artifacts = new HashMap<>();
     private final Set<String> building = new LinkedHashSet<>();
     private final Map<String, Boolean> compiledModules = new HashMap<>();
+    private final Env.Mode mode;
+    private final Map<String, Builder> isolatedBuilders = new HashMap<>();
 
     public Builder(Project project, Graph graph, MavenRepo repo, Env.Mode mode) {
         this.project = project;
         this.graph = graph;
         this.repo = repo;
+        this.mode = mode;
         this.env = Env.load(project.dir, mode);
+    }
+
+    /**
+     * The builder for a module: this one, or for an isolated module ({@code "isolated": true}) one over
+     * its own graph, so its classpaths come from its own resolution.
+     */
+    public Builder forModule(Project.Module m) {
+        if (!m.manifest.isolated) return this;
+        Graph iso = graph.isolated.get(m.name());
+        if (iso == null) return this; // already an isolated module's builder, or a project that is not a workspace
+        return isolatedBuilders.computeIfAbsent(m.name(), n -> new Builder(project.isolatedView(m), iso, repo, mode));
     }
 
     public Map<String, String> env() {

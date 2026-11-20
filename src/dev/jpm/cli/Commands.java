@@ -543,18 +543,19 @@ final class Commands {
         Project.Module rootMod = c.project.rootModule();
         if (all) Scripts.hooks(b, rootMod, c.project.root, "pre", "build", profile, Env.Mode.PRODUCTION);
         for (Project.Module m : mods) {
-            Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
-            b.jar(m);
+            Builder mb = b.forModule(m);
+            Scripts.hooks(mb, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
+            mb.jar(m);
             if (bundleFlag || flat || m.manifest.packaging.equals("bundle")) {
                 // a runnable jar-in-jar for apps; one flat jar for modules without a main (plugins) or with --flat
-                if (flat || m.manifest.mains.isEmpty()) b.flatBundle(m);
-                else b.bundle(m);
+                if (flat || m.manifest.mains.isEmpty()) mb.flatBundle(m);
+                else mb.bundle(m);
             }
             if (nativeImage) {
-                if (!m.manifest.mains.isEmpty()) b.nativeImage(m, null);
+                if (!m.manifest.mains.isEmpty()) mb.nativeImage(m, null);
                 else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to build natively");
             }
-            Scripts.hooks(b, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
+            Scripts.hooks(mb, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
         }
         if (all) Scripts.hooks(b, rootMod, c.project.root, "post", "build", profile, Env.Mode.PRODUCTION);
         return 0;
@@ -571,7 +572,7 @@ final class Commands {
         if (!dev) {
             Ctx c = open(false);
             Project.Module m = single(c.project, "run");
-            Builder b = c.builder(mode);
+            Builder b = c.builder(mode).forModule(m);
             Scripts.hooks(b, m, m.manifest, "pre", "start", null, mode);
             List<String> cmd = javaCommand(b, m, entry, appArgs, trace);
             int code = Exec.inherit(m.dir, cmd, Env.forChild(c.project.dir, mode));
@@ -691,10 +692,11 @@ final class Commands {
         List<Project.Module> mods = module != null ? targets(c.project, List.of(module)) : targets(c.project, List.of());
         int worst = 0;
         for (Project.Module m : mods) {
-            Scripts.hooks(b, m, m.manifest, "pre", "test", null, Env.Mode.DEVELOPMENT);
-            int code = TestRunner.run(b, m, args);
+            Builder mb = b.forModule(m);
+            Scripts.hooks(mb, m, m.manifest, "pre", "test", null, Env.Mode.DEVELOPMENT);
+            int code = TestRunner.run(mb, m, args);
             if (code != 0) worst = code;
-            else Scripts.hooks(b, m, m.manifest, "post", "test", null, Env.Mode.DEVELOPMENT);
+            else Scripts.hooks(mb, m, m.manifest, "post", "test", null, Env.Mode.DEVELOPMENT);
         }
         return worst;
     }
@@ -719,7 +721,7 @@ final class Commands {
         if (m == null || (!m.manifest.scripts.containsKey(name) && c.project.root.scripts.containsKey(name))) {
             m = c.project.rootModule();
         }
-        Builder b = c.builder(Env.Mode.DEVELOPMENT);
+        Builder b = c.builder(Env.Mode.DEVELOPMENT).forModule(m);
         return Scripts.run(b, m, name, args, Env.Mode.DEVELOPMENT);
     }
 
@@ -739,20 +741,21 @@ final class Commands {
      * compile and run), provided (compile only: dev dependencies), runtime (run only) and test.
      */
     private List<Object> ideDependencies(Ctx c, Builder b, Project.Module m) {
+        Graph graph = b.graph;
         List<Graph.Edge> runtime = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
         List<Graph.Edge> devOnly = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.DEV);
         List<Graph.Edge> test = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.TEST);
         Map<String, String> scopes = new LinkedHashMap<>();
-        for (String id : c.graph.closure(runtime, Graph.Walk.COMPILE)) scopes.putIfAbsent(id, "compile");
-        for (String id : c.graph.closure(runtime, Graph.Walk.RUNTIME)) scopes.putIfAbsent(id, "runtime");
-        for (String id : c.graph.closure(devOnly, Graph.Walk.ALL)) {
+        for (String id : graph.closure(runtime, Graph.Walk.COMPILE)) scopes.putIfAbsent(id, "compile");
+        for (String id : graph.closure(runtime, Graph.Walk.RUNTIME)) scopes.putIfAbsent(id, "runtime");
+        for (String id : graph.closure(devOnly, Graph.Walk.ALL)) {
             if ("runtime".equals(scopes.get(id))) scopes.put(id, "compile");
             else scopes.putIfAbsent(id, "provided");
         }
-        for (String id : c.graph.closure(test, Graph.Walk.ALL)) scopes.putIfAbsent(id, "test");
+        for (String id : graph.closure(test, Graph.Walk.ALL)) scopes.putIfAbsent(id, "test");
         List<Object> out = new ArrayList<>();
         for (Map.Entry<String, String> e : scopes.entrySet()) {
-            Graph.Pkg p = c.graph.get(e.getKey());
+            Graph.Pkg p = graph.get(e.getKey());
             if (p == null) continue;
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("id", p.id);
@@ -883,9 +886,12 @@ final class Commands {
         out.put("extensions", c.project.root.extensions);
         if (ide) out.put("scripts", new ArrayList<>(c.project.root.scripts.keySet()));
         List<Object> modules = new ArrayList<>();
+        Builder shared = b;
         for (Project.Module m : c.project.buildOrder()) {
+            b = shared.forModule(m);
             Map<String, Object> mod = new LinkedHashMap<>();
             Manifest mf = m.manifest;
+            if (mf.isolated) mod.put("isolated", true);
             mod.put("name", m.name());
             if (mf.group != null) mod.put("group", mf.group);
             mod.put("version", m.version());
@@ -938,7 +944,7 @@ final class Commands {
                         }
                     }
                 }
-                Graph.Pkg p = c.graph.get(k.toString());
+                Graph.Pkg p = b.graph.get(k.toString());
                 if (p != null && p.kind != Graph.Kind.LOCAL) {
                     dep.put("resolved", p.version);
                     if (p.commit != null) dep.put("commit", p.commit);
