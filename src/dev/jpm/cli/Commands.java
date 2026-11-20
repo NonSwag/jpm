@@ -797,7 +797,8 @@ final class Commands {
         out.put("jpmVersion", Main.VERSION);
         out.put("projectDir", c.project.dir.toString());
         out.put("name", c.project.root.name);
-        if (c.project.root.version != null) out.put("version", c.project.root.version);
+        String rootVersion = Project.versionOverride() != null ? Project.versionOverride() : c.project.root.version;
+        if (rootVersion != null) out.put("version", rootVersion);
         out.put("workspace", c.project.root.isWorkspaceRoot());
         out.put("repositories", c.project.root.repositories);
         out.put("extensions", c.project.root.extensions);
