@@ -27,7 +27,7 @@ public final class Manifest {
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
             "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
-            "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
+            "javacArgs", "nativeArgs", "layout", "sources", "resources", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
         RUNTIME("runtime"), DEV("dev"), TEST("test");
@@ -82,6 +82,10 @@ public final class Manifest {
     public final List<String> javacArgs;
     public final List<String> nativeArgs;
     public final Layout layout;
+    /** Source folders relative to the module, replacing the layout's one; empty for the layout's. */
+    public final List<String> sources;
+    /** Resource folders relative to the module, replacing the layout's one; empty for the layout's. */
+    public final List<String> resources;
     /** What `jpm build` produces: "jar" (default) or "bundle" (jar-in-jar with isolated modules). */
     public final String packaging;
     public final String description;
@@ -193,6 +197,8 @@ public final class Manifest {
         if (!packaging.equals("jar") && !packaging.equals("bundle")) throw err(root.get("package"), "package must be \"jar\" or \"bundle\"");
         this.layout = Layout.named(str("layout", false));
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
+        this.sources = folders("sources");
+        this.resources = folders("resources");
     }
 
     private Dependency dependency(DepKey key, Jsonc.Member e, Scope s) {
@@ -310,6 +316,27 @@ public final class Manifest {
             out.put(e.key, (String) e.value.value);
         }
         return out;
+    }
+
+    private List<String> folders(String key) {
+        List<String> out = stringList(key);
+        for (String f : out) {
+            Path p = Path.of(f).normalize();
+            if (f.isBlank() || p.isAbsolute() || p.startsWith("..")) throw err(root.get(key), key + " are folders inside the module, such as \"src/main/java\"");
+        }
+        return out;
+    }
+
+    /** The module's source folders: {@code "sources"}, or the layout's one. */
+    public List<Path> sourceDirs(Path moduleDir) {
+        if (sources.isEmpty()) return List.of(layout.sources(moduleDir));
+        return sources.stream().map(moduleDir::resolve).toList();
+    }
+
+    /** The module's resource folders: {@code "resources"}, or the layout's one. */
+    public List<Path> resourceDirs(Path moduleDir) {
+        if (resources.isEmpty()) return List.of(layout.resources(moduleDir));
+        return resources.stream().map(moduleDir::resolve).toList();
     }
 
     private List<String> stringList(String key) {

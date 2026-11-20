@@ -211,14 +211,14 @@ public final class Builder {
             Jdk jdk = jdk(m.manifest);
             int release = release(m.manifest, jdk);
             List<Path> roots = new ArrayList<>();
-            roots.add(m.srcDir());
+            roots.addAll(m.srcDirs());
             Path gen = generateSources(m);
             if (gen != null) roots.add(gen);
             String key = inputsKey(cp, proc);
             boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
                     classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key,
-                    List.of(m.assetsDir())));
-            Resources.sync(List.of(m.assetsDir()), classesDir(m), m.cacheDir().resolve("resources.list"));
+                    m.assetsDirs()));
+            Resources.sync(m.assetsDirs(), classesDir(m), m.cacheDir().resolve("resources.list"));
             if (ran) Log.step("Compiled", m.name() + " " + m.version() + Log.dim(" (" + jdk.id() + ", release " + release + ")"));
             compiledModules.put(m.name(), ran);
             return ran;
@@ -665,7 +665,7 @@ public final class Builder {
 
             Log.step("Building", p.id + " " + p.version + Log.dim(" (" + p.commit.substring(0, 7) + ")"));
             List<Path> roots = new ArrayList<>();
-            roots.add(mod.manifest().layout.sources(src));
+            roots.addAll(mod.manifest().sourceDirs(src));
             if (!defs.isEmpty() || mod.manifest().defineClass != null) {
                 String fqcn = Defines.className(mod.manifest());
                 Path gen = buildDir.resolve("generated");
@@ -675,8 +675,8 @@ public final class Builder {
             Path classes = buildDir.resolve("classes");
             Compiler.compile(new Compiler.Request(p.id, jdk, release, roots, cp, proc, classes,
                     buildDir.resolve("state.json"), mod.manifest().javacArgs, key,
-                    List.of(mod.manifest().layout.resources(src))));
-            Resources.sync(List.of(mod.manifest().layout.resources(src)), classes, buildDir.resolve("resources.list"));
+                    mod.manifest().resourceDirs(src)));
+            Resources.sync(mod.manifest().resourceDirs(src), classes, buildDir.resolve("resources.list"));
             List<Path> dirs = new ArrayList<>();
             dirs.add(classes);
             Map<String, String> attrs = new LinkedHashMap<>();

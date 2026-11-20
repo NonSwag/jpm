@@ -44,8 +44,12 @@ public final class Project {
             return "workspace:" + name();
         }
 
-        public Path srcDir() { return manifest.layout.sources(dir); }
-        public Path assetsDir() { return manifest.layout.resources(dir); }
+        /** The first source folder (the only one unless the manifest lists {@code "sources"}). */
+        public Path srcDir() { return srcDirs().get(0); }
+        /** The first resource folder (the only one unless the manifest lists {@code "resources"}). */
+        public Path assetsDir() { return assetsDirs().get(0); }
+        public List<Path> srcDirs() { return manifest.sourceDirs(dir); }
+        public List<Path> assetsDirs() { return manifest.resourceDirs(dir); }
         public Path testDir() { return manifest.layout.tests(dir); }
         public Path testResourcesDir() { return manifest.layout.testResources(dir); }
 

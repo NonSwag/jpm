@@ -191,6 +191,20 @@
       },
       "uniqueItems": true
     },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Source folders of the module, relative to it, replacing the layout's: e.g. [\"src/main/java\", \"src/generated/java\"]."
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Resource folders of the module, relative to it, replacing the layout's. Earlier folders win when two hold the same file."
+    },
     "visibility": {
       "enum": [
         "public",

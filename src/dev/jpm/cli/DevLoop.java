@@ -96,8 +96,8 @@ final class DevLoop {
         for (String f : List.of(".env", ".env.development", ".env.local")) roots.add(p.dir.resolve(f));
         for (Project.Module m : p.modules) {
             roots.add(m.dir.resolve(Manifest.FILE));
-            roots.add(m.srcDir());
-            if (!m.assetsDir().startsWith(m.srcDir())) roots.add(m.assetsDir());
+            roots.addAll(m.srcDirs());
+            for (Path a : m.assetsDirs()) if (m.srcDirs().stream().noneMatch(a::startsWith)) roots.add(a);
             roots.add(m.dir.resolve("patches"));
         }
         StringBuilder sb = new StringBuilder();

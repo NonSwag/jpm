@@ -620,7 +620,7 @@ final class Commands {
             args.add(main);
             return args;
         }
-        Path moduleInfo = dev.jpm.build.Modules.moduleInfo(List.of(m.srcDir()));
+        Path moduleInfo = dev.jpm.build.Modules.moduleInfo(m.srcDirs());
         dev.jpm.build.Modules.Declaration decl = moduleInfo != null ? dev.jpm.build.Modules.parse(moduleInfo)
                 : new dev.jpm.build.Modules.Declaration(module, Set.of());
         List<List<Path>> split = dev.jpm.build.Modules.split(decl, b.classpath(m, Builder.Cp.RUNTIME));
@@ -815,6 +815,8 @@ final class Commands {
             mod.put("layout", mf.layout.name());
             mod.put("sourceDir", m.srcDir().toString());
             mod.put("resourceDir", m.assetsDir().toString());
+            mod.put("sourceDirs", m.srcDirs().stream().map(Path::toString).toList());
+            mod.put("resourceDirs", m.assetsDirs().stream().map(Path::toString).toList());
             mod.put("jar", b.jarPath(m).toString());
             mod.put("java", mf.java);
             try {
