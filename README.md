@@ -87,7 +87,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |
 | `build`, `start`, `test`, `clean` | Build into `dist/`, run main with production env, run tests, delete output |
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
-| `run <script> [args]` | Run a script from `scripts` (no shorthand) |
+| `run [<module>:]<script> [args]` | Run a script from `scripts` (no shorthand); `<module>:<script>` runs a workspace module's script from anywhere in the workspace |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
 | `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports, `--canary` installs the newest build of the main branch) |
 | `help`, `--version` | Show the commands, or jpm's version |

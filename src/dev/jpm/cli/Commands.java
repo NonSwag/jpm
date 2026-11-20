@@ -707,7 +707,12 @@ final class Commands {
         if (!args.isEmpty() && args.get(0).equals("--")) args.remove(0);
         Ctx c = open(false);
         Project.Module m = c.project.moduleAt(cwd);
-        if (m == null || (!m.manifest.scripts.containsKey(name) && c.project.root.scripts.containsKey(name))) {
+        // <module>:<script> runs another module's script from anywhere in the workspace
+        int colon = name.indexOf(':');
+        if (colon > 0 && !name.endsWith(":") && c.project.module(name.substring(0, colon)) != null) {
+            m = c.project.module(name.substring(0, colon));
+            name = name.substring(colon + 1);
+        } else if (m == null || (!m.manifest.scripts.containsKey(name) && c.project.root.scripts.containsKey(name))) {
             m = c.project.rootModule();
         }
         Builder b = c.builder(Env.Mode.DEVELOPMENT);
