@@ -122,6 +122,13 @@ public final class Builder {
     // ---------------------------------------------------------------- classpaths
 
     public List<Path> classpath(Project.Module m, Cp kind) {
+        List<Path> out = new ArrayList<>();
+        for (String id : classpathIds(m, kind)) out.addAll(paths(id, m));
+        return Compiler.distinct(out);
+    }
+
+    /** The packages on one of a module's classpaths, in classpath order, without fetching or building any. */
+    public List<String> classpathIds(Project.Module m, Cp kind) {
         List<Graph.Edge> runtime = Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
         List<Graph.Edge> dev = Resolver.rootEdges(m, Manifest.Scope.DEV);
         List<Graph.Edge> test = Resolver.rootEdges(m, Manifest.Scope.TEST);
@@ -145,9 +152,12 @@ public final class Builder {
                 ids.addAll(graph.closure(test, Graph.Walk.RUNTIME));
             }
         }
-        List<Path> out = new ArrayList<>();
-        for (String id : new LinkedHashSet<>(ids)) out.addAll(paths(id, m));
-        return Compiler.distinct(out);
+        return new ArrayList<>(new LinkedHashSet<>(ids));
+    }
+
+    /** Whether a manifest of the project patches this package. */
+    public boolean isPatched(String id) {
+        return patchOwner(id) != null;
     }
 
     /** Runtime dependency classpath without compiling the project's own modules (for scripts). */
@@ -253,8 +263,13 @@ public final class Builder {
      * Writes the module's generated sources (the defines class) and returns their folder, or null if the
      * module has none.
      */
+    /** A module's define values, resolved from the manifest, the environment and .env files. */
+    public List<Defines.Value> defineValues(Project.Module m) {
+        return Defines.resolve(m.manifest, null, null, null, env);
+    }
+
     public Path generateSources(Project.Module m) {
-        List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
+        List<Defines.Value> defs = defineValues(m);
         Path gen = m.cacheDir().resolve("generated");
         if (defs.isEmpty() && m.manifest.defineClass == null) {
             Fs.deleteTree(gen);
