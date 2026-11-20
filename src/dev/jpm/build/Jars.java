@@ -91,14 +91,21 @@ public final class Jars {
      * Returns how many entries were written.
      */
     public static int merge(Path jar, List<Path> inputs, Map<String, String> attrs) {
+        return merge(jar, inputs, attrs, new Relocator(Map.of()));
+    }
+
+    /** Like {@link #merge(Path, List, Map)}, with every entry (the app's own included) relocated. */
+    public static int merge(Path jar, List<Path> inputs, Map<String, String> attrs, Relocator relocator) {
         Map<String, byte[]> entries = new TreeMap<>();
         Map<String, java.util.LinkedHashSet<String>> services = new TreeMap<>();
         boolean first = true;
         for (Path in : inputs) {
             boolean own = first;
             first = false;
-            forEachEntry(in, (name, bytes) -> {
-                if (name.endsWith("/") || name.equals("META-INF/MANIFEST.MF")) return;
+            forEachEntry(in, (original, raw) -> {
+                if (original.endsWith("/") || original.equals("META-INF/MANIFEST.MF")) return;
+                String name = relocator.isEmpty() ? original : relocator.entryName(original);
+                byte[] bytes = relocator.entry(original, raw);
                 String upper = name.toUpperCase(java.util.Locale.ROOT);
                 if (upper.startsWith("META-INF/") && !upper.substring(9).contains("/")
                         && (upper.endsWith(".SF") || upper.endsWith(".RSA") || upper.endsWith(".DSA") || upper.endsWith(".EC"))) return;
