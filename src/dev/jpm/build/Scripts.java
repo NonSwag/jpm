@@ -79,6 +79,9 @@ public final class Scripts {
     /** Build information passed to scripts and extensions. */
     public static Map<String, String> info(Builder b, Project.Module m) {
         Map<String, String> env = new LinkedHashMap<>();
+        // so scripts and hooks can call back into this jpm (jpm info --json, jpm build <module>)
+        env.put("JPM_EXE", dev.jpm.util.Self.exe());
+        env.put("JPM_VERSION_OF_JPM", dev.jpm.BuildConfig.VERSION);
         env.put("JPM_PROJECT_DIR", b.project.dir.toString());
         env.put("JPM_MODULE_DIR", m.dir.toString());
         env.put("JPM_NAME", m.name());

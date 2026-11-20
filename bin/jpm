@@ -5,4 +5,6 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 jar="$(ls -t "$here"/dist/jpm-*.jar 2>/dev/null | head -n 1 || true)"
 [ -n "$jar" ] || jar="$here/.cache/bootstrap/jpm.jar"
 [ -f "$jar" ] || { echo "jpm is not built yet; run $here/bootstrap.sh" >&2; exit 1; }
+# scripts, hooks and extensions call back into jpm through JPM_EXE
+JPM_EXE="$here/bin/jpm"; export JPM_EXE
 exec "${JAVA_HOME:+$JAVA_HOME/bin/}java" -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -Xshare:auto -jar "$jar" "$@"
