@@ -222,6 +222,13 @@
         "type": "string"
       }
     },
+    "filter": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Resources (globs relative to the resource folder, e.g. \"*.properties\") copied with each ${NAME} replaced by the define value NAME; NAME and VERSION are the module's."
+    },
     "layout": {
       "enum": [
         "jpm",

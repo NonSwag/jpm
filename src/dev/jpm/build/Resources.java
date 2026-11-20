@@ -4,13 +4,20 @@ import dev.jpm.util.Fs;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Copies a module's resources next to its compiled classes, so the classes folder is everything the jar,
@@ -39,6 +46,16 @@ public final class Resources {
      * anything changed.
      */
     public static boolean sync(List<Path> roots, Path out, Path stateFile) {
+        return sync(roots, out, stateFile, List.of(), Map.of());
+    }
+
+    /**
+     * Like {@link #sync(List, Path, Path)}, and resources matching one of the {@code filter} globs (paths
+     * relative to their resource folder, e.g. {@code "*.properties"} or {@code "META-INF/app.txt"}) are copied
+     * with each {@code ${NAME}} replaced by {@code values.get("NAME")}; unknown names are left as they are.
+     */
+    public static boolean sync(List<Path> roots, Path out, Path stateFile, List<String> filter, Map<String, String> values) {
+        List<PathMatcher> matchers = filter.stream().map(g -> FileSystems.getDefault().getPathMatcher("glob:" + g)).toList();
         TreeMap<String, Path> now = find(roots);
         TreeSet<String> before = new TreeSet<>();
         if (Files.isRegularFile(stateFile)) {
@@ -52,6 +69,15 @@ public final class Resources {
             for (var e : now.entrySet()) {
                 Path target = out.resolve(e.getKey());
                 Path src = e.getValue();
+                Path rel = Path.of(e.getKey());
+                if (matchers.stream().anyMatch(mt -> mt.matches(rel))) {
+                    byte[] filtered = substitute(Files.readString(src), values).getBytes(StandardCharsets.UTF_8);
+                    if (Files.isRegularFile(target) && Arrays.equals(Files.readAllBytes(target), filtered)) continue;
+                    Fs.mkdirs(target.getParent());
+                    Files.write(target, filtered);
+                    changed = true;
+                    continue;
+                }
                 if (same(src, target)) continue;
                 Fs.mkdirs(target.getParent());
                 Files.copy(src, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
@@ -63,6 +89,19 @@ public final class Resources {
         String list = String.join("\n", new ArrayList<>(now.keySet()));
         if (!Files.isRegularFile(stateFile) || !Fs.read(stateFile).equals(list)) Fs.write(stateFile, list);
         return changed;
+    }
+
+    private static final Pattern PLACEHOLDER = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_.]*)}");
+
+    static String substitute(String text, Map<String, String> values) {
+        Matcher m = PLACEHOLDER.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String v = values.get(m.group(1));
+            m.appendReplacement(sb, Matcher.quoteReplacement(v != null ? v : m.group()));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     /** Same size and time (to the millisecond, as file systems round differently), else same bytes. */
