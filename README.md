@@ -299,7 +299,8 @@ platform engine works. `jpm test com.example.FooTest`, `jpm test 'com.example.*'
 **Scripts** run with `jpm run <name>`. `.java` scripts run on the source launcher with the runtime
 classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts and extensions get
 `JPM_PROJECT_DIR`, `JPM_MODULE_DIR`, `JPM_NAME`, `JPM_VERSION`, `JPM_MANIFEST`, `JPM_CLASSES_DIR`,
-`JPM_CLASSPATH`, `JPM_JAR` (after a build) and `JPM_JAVA_HOME`; extensions also get `JPM_CONFIG`.
+`JPM_CLASSPATH`, `JPM_JAR` (after a build), `JPM_JAVA_HOME`, and `JPM_EXE` and `JPM_VERSION_OF_JPM` to
+call back into the jpm running them; extensions also get `JPM_CONFIG`.
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
