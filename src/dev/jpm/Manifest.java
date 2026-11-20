@@ -90,7 +90,18 @@ public final class Manifest {
     /** Settings for extensions, by extension name (e.g. "publish"); jpm passes them through untouched. */
     public final Map<String, Object> extensions;
 
+    /**
+     * Fields a workspace module takes from the workspace root when it does not set them itself.
+     * {@code javacArgs} and {@code nativeArgs} are the root's followed by the module's own.
+     */
+    public static final List<String> INHERITED = List.of("java", "target", "group", "license", "url", "layout", "javacArgs", "nativeArgs");
+
     private Manifest(Path file, String source) {
+        this(file, source, null);
+    }
+
+    /** {@code parent}: the workspace root this module belongs to, whose settings it inherits; or null. */
+    private Manifest(Path file, String source, Manifest parent) {
         this.file = file;
         this.source = source;
         try {
@@ -110,9 +121,9 @@ public final class Manifest {
         this.name = str("name", true);
         if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]*")) throw err(root.get("name"), "invalid name \"" + name + "\"");
         this.version = str("version", false);
-        this.group = str("group", false);
-        this.java = str("java", false);
-        this.target = str("target", false);
+        this.group = inherit(str("group", false), parent == null ? null : parent.group);
+        this.java = inherit(str("java", false), parent == null ? null : parent.java);
+        this.target = inherit(str("target", false), parent == null ? null : parent.target);
         this.visibility = str("visibility", false) == null ? "public" : str("visibility", false);
         if (!visibility.equals("public") && !visibility.equals("internal")) {
             throw err(root.get("visibility"), "visibility must be \"public\" or \"internal\"");
@@ -179,20 +190,33 @@ public final class Manifest {
         }
         this.workspace = stringList("workspace");
         this.repositories = stringList("repositories");
-        this.javacArgs = stringList("javacArgs");
-        this.nativeArgs = stringList("nativeArgs");
+        this.javacArgs = parent == null ? stringList("javacArgs") : concat(parent.javacArgs, stringList("javacArgs"));
+        this.nativeArgs = parent == null ? stringList("nativeArgs") : concat(parent.nativeArgs, stringList("nativeArgs"));
         this.packaging = str("package", false) == null ? "jar" : str("package", false);
         this.description = str("description", false);
-        this.license = str("license", false);
-        this.url = str("url", false);
+        this.license = inherit(str("license", false), parent == null ? null : parent.license);
+        this.url = inherit(str("url", false), parent == null ? null : parent.url);
         Jsonc.Node ext = root.get("extensions");
         if (ext != null && !ext.isObject()) throw err(ext, "extensions must be an object of extension name to its settings");
         @SuppressWarnings("unchecked")
         Map<String, Object> extMap = ext == null ? Map.of() : (Map<String, Object>) ext.value;
         this.extensions = extMap;
         if (!packaging.equals("jar") && !packaging.equals("bundle")) throw err(root.get("package"), "package must be \"jar\" or \"bundle\"");
-        this.layout = Layout.named(str("layout", false));
+        String layoutName = str("layout", false);
+        this.layout = layoutName == null && parent != null ? parent.layout : Layout.named(layoutName);
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
+    }
+
+    private static String inherit(String own, String fromRoot) {
+        return own != null ? own : fromRoot;
+    }
+
+    private static List<String> concat(List<String> a, List<String> b) {
+        if (a.isEmpty()) return b;
+        if (b.isEmpty()) return a;
+        List<String> out = new ArrayList<>(a);
+        out.addAll(b);
+        return List.copyOf(out);
     }
 
     private Dependency dependency(DepKey key, Jsonc.Member e, Scope s) {
@@ -271,6 +295,17 @@ public final class Manifest {
 
     public static Manifest parse(Path file, String source) {
         return new Manifest(file, source);
+    }
+
+    /** A workspace module's manifest, with the settings it inherits from {@code root} (see {@link #INHERITED}). */
+    public static Manifest parse(Path file, String source, Manifest root) {
+        return new Manifest(file, source, root);
+    }
+
+    /** Loads a workspace module's manifest, with the settings it inherits from {@code root}. */
+    public static Manifest load(Path dir, Manifest root) {
+        Manifest plain = load(dir);
+        return root == null ? plain : new Manifest(plain.file, plain.source, root);
     }
 
     public Path dir() {
