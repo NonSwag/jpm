@@ -35,10 +35,13 @@ public final class MavenRepo {
     private final ConcurrentHashMap<String, List<Version>> versionsMemo = new ConcurrentHashMap<>();
 
     public MavenRepo(List<String> extra) {
+        this(withCentral(extra), true);
+    }
+
+    /** Exactly these repositories, without Maven Central: for tests. */
+    MavenRepo(List<String> repositories, boolean exact) {
         List<String> r = new ArrayList<>();
-        String central = System.getenv("JPM_MAVEN_CENTRAL");
-        r.add(central != null && !central.isBlank() ? slash(central) : CENTRAL);
-        for (String e : extra) r.add(slash(e));
+        for (String e : repositories) r.add(slash(e));
         this.repos = r;
         this.cache = Fs.home().resolve("repository");
         this.offline = Fs.offline();
@@ -47,6 +50,14 @@ public final class MavenRepo {
                 .proxy(ProxySelector.getDefault())
                 .connectTimeout(Duration.ofSeconds(20))
                 .build();
+    }
+
+    private static List<String> withCentral(List<String> extra) {
+        List<String> r = new ArrayList<>();
+        String central = System.getenv("JPM_MAVEN_CENTRAL");
+        r.add(central != null && !central.isBlank() ? central : CENTRAL);
+        r.addAll(extra);
+        return r;
     }
 
     private static String slash(String s) {
@@ -70,7 +81,14 @@ public final class MavenRepo {
         return cache.resolve(path(group, artifact, version, classifier, ext));
     }
 
-    /** Fetches a file into the cache, returning null if no repository has it. */
+    /** Why the last {@link #fetch} of a file found nothing although a repository could not be asked, by cache path. */
+    private final ConcurrentHashMap<Path, String> failures = new ConcurrentHashMap<>();
+
+    /**
+     * Fetches a file into the cache, returning null if no repository has it. "Not found" is only remembered
+     * (in a {@code .missing} file) when every repository answered 404 or 410: a rate limit, a server error,
+     * a refusal or a network error is not proof the file does not exist, so the next run asks again.
+     */
     public Path fetch(String group, String artifact, String version, String classifier, String ext) {
         Path local = local(group, artifact, version, classifier, ext);
         if (Files.exists(local)) return local;
@@ -80,20 +98,31 @@ public final class MavenRepo {
         if (Files.exists(missing) && !refreshMetadata && Fs.read(missing).equals(searched)) return null;
         String rel = path(group, artifact, version, classifier, ext);
         boolean snapshot = version.endsWith("-SNAPSHOT");
+        List<String> problems = new ArrayList<>();
         for (String repo : repos) {
-            if (download(repo + rel, local)) return local;
+            Result r = download(repo + rel, local);
+            if (r.found()) return local;
+            if (r.problem() != null) problems.add(r.problem());
             // Snapshot repositories publish timestamped files (lib-1.0-20250101.120000-3.jar), named in
             // that version's maven-metadata.xml; ~/.m2 keeps the plain -SNAPSHOT name.
             if (snapshot) {
-                String timestamped = snapshotVersion(repo, group, artifact, version, classifier, ext);
+                String timestamped = snapshotVersion(repo, group, artifact, version, classifier, ext, problems);
                 String file = group.replace('.', '/') + "/" + artifact + "/" + version + "/" + artifact + "-" + timestamped
                         + (classifier == null || classifier.isEmpty() ? "" : "-" + classifier) + "." + ext;
-                if (timestamped != null && download(repo + file, local)) {
-                    return local;
+                if (timestamped != null) {
+                    Result t = download(repo + file, local);
+                    if (t.found()) return local;
+                    if (t.problem() != null) problems.add(t.problem());
                 }
             }
         }
-        if (!offline) Fs.write(missing, searched);
+        if (problems.isEmpty()) {
+            failures.remove(local);
+            if (!offline) Fs.write(missing, searched);
+        } else {
+            failures.put(local, String.join("; ", problems));
+            Log.debug("not caching a miss for " + rel + ": " + String.join("; ", problems));
+        }
         return null;
     }
 
@@ -101,10 +130,13 @@ public final class MavenRepo {
      * The timestamped version a snapshot repository publishes for {@code version} (e.g. 1.0-SNAPSHOT is
      * 1.0-20250101.120000-3), for the given extension and classifier, or null if the repository has none.
      */
-    String snapshotVersion(String repo, String group, String artifact, String version, String classifier, String ext) {
+    String snapshotVersion(String repo, String group, String artifact, String version, String classifier, String ext,
+                           List<String> problems) {
         String rel = group.replace('.', '/') + "/" + artifact + "/" + version + "/maven-metadata.xml";
         Path meta = cache.resolve(rel).resolveSibling("maven-metadata-" + Integer.toHexString(repo.hashCode()) + ".xml");
-        if (!download(repo + rel, meta)) return null;
+        Result r = download(repo + rel, meta);
+        if (r.problem() != null) problems.add(r.problem());
+        if (!r.found()) return null;
         return snapshotVersion(Fs.read(meta), version, classifier, ext);
     }
 
@@ -138,6 +170,12 @@ public final class MavenRepo {
     public Path require(String group, String artifact, String version, String classifier, String ext) {
         Path p = fetch(group, artifact, version, classifier, ext);
         if (p == null) {
+            String failure = failures.get(local(group, artifact, version, classifier, ext));
+            if (failure != null) {
+                throw new JpmException("Could not download " + group + ":" + artifact + ":" + version
+                        + (classifier != null ? ":" + classifier : "") + " (" + ext + "): " + failure
+                        + "\nThis looks like a network or repository problem, not a missing artifact: try again.");
+            }
             throw new JpmException("Could not find " + group + ":" + artifact + ":" + version
                     + (classifier != null ? ":" + classifier : "") + " (" + ext + ") in " + String.join(", ", repos)
                     + "\nIf it is published elsewhere, add that repository: `jpm add -r <url> " + group + ":" + artifact
@@ -153,6 +191,7 @@ public final class MavenRepo {
 
     private List<Version> loadVersions(String group, String artifact) {
         List<Version> out = new ArrayList<>();
+        List<String> problems = new ArrayList<>();
         for (int i = 0; i < repos.size(); i++) {
             String repo = repos.get(i);
             Path local = cache.resolve(group.replace('.', '/') + "/" + artifact + "/maven-metadata-" + i + ".xml");
@@ -163,7 +202,8 @@ public final class MavenRepo {
             } catch (IOException ignored) {
             }
             if (!fresh && !offline) {
-                download(repo + group.replace('.', '/') + "/" + artifact + "/maven-metadata.xml", local);
+                Result r = download(repo + group.replace('.', '/') + "/" + artifact + "/maven-metadata.xml", local);
+                if (r.problem() != null) problems.add(r.problem());
             }
             if (!Files.exists(local)) continue;
             Matcher m = Pattern.compile("<version>\\s*([^<\\s]+)\\s*</version>").matcher(Fs.read(local));
@@ -173,6 +213,10 @@ public final class MavenRepo {
             }
         }
         if (out.isEmpty()) {
+            if (!problems.isEmpty()) {
+                throw new JpmException("Could not list the versions of " + group + ":" + artifact + ": " + String.join("; ", problems)
+                        + "\nThis looks like a network or repository problem, not a missing artifact: try again.");
+            }
             throw new JpmException("Could not find " + group + ":" + artifact + " in " + String.join(", ", repos)
                     + (offline ? " (offline)" : ""));
         }
@@ -180,54 +224,106 @@ public final class MavenRepo {
         return out;
     }
 
-    private boolean download(String url, Path target) {
+    /**
+     * The outcome of asking one repository for one file: {@code found}, or not found with {@code problem}
+     * null when the repository said so (404 or 410), or not found with a problem when it could not tell
+     * (refused, rate limited, failing, unreachable).
+     */
+    record Result(boolean found, String problem) {
+        static final Result FOUND = new Result(true, null);
+        static final Result ABSENT = new Result(false, null);
+    }
+
+    /** Attempts per file for rate limits (429), server errors (5xx) and network errors. */
+    static final int ATTEMPTS = 4;
+    /** Longest wait between attempts, including one a Retry-After header asks for. */
+    static final Duration MAX_WAIT = Duration.ofSeconds(30);
+    /** Waits between attempts; tests replace it so they do not sleep. */
+    static java.util.function.Consumer<Duration> sleeper = d -> {
+        try {
+            Thread.sleep(d.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JpmException("Interrupted");
+        }
+    };
+
+    /** The wait before attempt {@code attempt + 1}: Retry-After when the server sent one, else 1, 2, 4 s. */
+    static Duration backoff(int attempt, String retryAfter) {
+        Duration d = Duration.ofSeconds(1L << attempt);
+        if (retryAfter != null) {
+            try {
+                d = Duration.ofSeconds(Long.parseLong(retryAfter.trim()));
+            } catch (NumberFormatException e) {
+                try {
+                    d = Duration.between(java.time.Instant.now(),
+                            java.time.ZonedDateTime.parse(retryAfter.trim(), java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant());
+                } catch (java.time.format.DateTimeParseException ignored) {
+                    // not a date either: keep the default
+                }
+            }
+        }
+        if (d.isNegative()) d = Duration.ZERO;
+        return d.compareTo(MAX_WAIT) > 0 ? MAX_WAIT : d;
+    }
+
+    private Result download(String url, Path target) {
         if (url.startsWith("file:")) {
             // local repositories: copy the file if it is there
             try {
                 Path src = Path.of(URI.create(url));
-                if (!Files.isRegularFile(src)) return false;
+                if (!Files.isRegularFile(src)) return Result.ABSENT;
                 Files.createDirectories(target.getParent());
                 Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
                 Files.copy(src, tmp, StandardCopyOption.REPLACE_EXISTING);
                 Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                return true;
+                return Result.FOUND;
             } catch (IOException | IllegalArgumentException e) {
                 throw new JpmException("Could not read " + url + ": " + e.getMessage());
             }
         }
-        if (offline) return false;
+        if (offline) return Result.ABSENT;
         Log.debug("GET " + url);
-        for (int attempt = 0; attempt < 3; attempt++) {
+        String problem = null;
+        String retryAfter = null;
+        for (int attempt = 0; attempt < ATTEMPTS; attempt++) {
+            if (attempt > 0) sleeper.accept(backoff(attempt - 1, retryAfter));
+            retryAfter = null;
             try {
                 HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                         .timeout(Duration.ofMinutes(2))
                         .header("User-Agent", "jpm")
                         .GET().build();
                 HttpResponse<InputStream> resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-                if (resp.statusCode() == 404 || resp.statusCode() == 403 || resp.statusCode() == 401) {
-                    resp.body().close();
-                    return false;
+                int status = resp.statusCode();
+                if (status == 200) {
+                    Files.createDirectories(target.getParent());
+                    Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
+                    try (InputStream in = resp.body()) {
+                        Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (IOException e) {
+                        Files.deleteIfExists(tmp);
+                        throw e;
+                    }
+                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                    return Result.FOUND;
                 }
-                if (resp.statusCode() != 200) {
-                    resp.body().close();
-                    if (resp.statusCode() >= 500) continue;
-                    return false;
-                }
-                Files.createDirectories(target.getParent());
-                Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
-                try (InputStream in = resp.body()) {
-                    Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-                }
-                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                return true;
+                resp.body().close();
+                if (status == 404 || status == 410) return Result.ABSENT;
+                problem = url + " answered HTTP " + status;
+                // Refusals are not retried (they will not change), but not remembered as "missing" either:
+                // some repositories answer 401/403 for files they do not have, proxies for hosts they block.
+                if (status == 401 || status == 403) return new Result(false, problem);
+                if (status != 429 && status < 500) return new Result(false, problem);
+                retryAfter = resp.headers().firstValue("Retry-After").orElse(null);
             } catch (IOException e) {
                 Log.debug("download failed: " + e);
-                if (attempt == 2) throw new JpmException("Could not download " + url + ": " + e.getMessage());
+                problem = url + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new JpmException("Interrupted");
             }
         }
-        return false;
+        return new Result(false, problem + " (after " + ATTEMPTS + " attempts)");
     }
 }
