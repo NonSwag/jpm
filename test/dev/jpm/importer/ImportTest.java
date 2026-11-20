@@ -136,6 +136,84 @@ class ImportTest {
         assertTrue(imp.warnings.stream().noneMatch(w -> w.contains("root project applies")), imp.warnings.toString());
     }
 
+    /** Kotlin DSL builds as a real multi-module project writes them (cases from a migrated server build). */
+    @Test
+    void readsKotlinBuildsAsText(@TempDir Path dir) {
+        Fs.write(dir.resolve("settings.gradle.kts"), """
+                pluginManagement {
+                    repositories { maven("https://repo.example.org/plugins/") }
+                    includeBuild("build-logic")
+                }
+                rootProject.name = "server" // the root
+                enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
+                include("server-api")
+                include("server-core")
+                dependencyResolutionManagement {
+                    versionCatalogs { create("libs") { from(files("catalog/deps.versions.toml")) } }
+                }
+                """);
+        Fs.write(dir.resolve("catalog/deps.versions.toml"), """
+                [versions]
+                netty = "4.2.19.Final"
+                [libraries]
+                netty-buffer = { module = "io.netty:netty-buffer", version.ref = "netty" }
+                netty-epoll = { module = "io.netty:netty-transport-native-epoll", version.ref = "netty" }
+                gson = "com.google.code.gson:gson:2.15.0"
+                [bundles]
+                netty = [
+                    "netty-buffer",
+                ]
+                """);
+        Fs.write(dir.resolve("build.gradle.kts"), "allprojects {\n    group = \"org.example\"\n}\n");
+        Fs.write(dir.resolve("server-api/build.gradle.kts"), """
+                plugins { `java-library` }
+                repositories {
+                    maven("https://repo.example.org/releases/") // releases
+                    maven("https://repo.example.org/snapshots/")
+                }
+                dependencies {
+                    api(libs.gson)
+                }
+                tasks.register("check-all") {
+                    group = "verification"
+                }
+                """);
+        Fs.write(dir.resolve("server-core/build.gradle.kts"), """
+                plugins { java }
+                tasks.named("jar") { group = "build" }
+                configurations.named("api")
+                dependencies {
+                    implementation(projects.serverApi) {
+                        exclude(group = "com.google.code.gson", module = "gson")
+                    }
+                    implementation(libs.bundles.netty)
+                    for (platform in listOf("linux-x86_64", "linux-aarch_64")) {
+                        runtimeOnly(variantOf(libs.netty.epoll) { classifier(platform) })
+                    }
+                }
+                """);
+        Imported imp = GradleImport.runStatic(dir);
+        assertEquals(List.of("server-api", "server-core"), imp.manifests.get("").get("workspace"), "includeBuild is another build");
+        assertEquals(List.of("https://repo.example.org/releases/", "https://repo.example.org/snapshots/"),
+                imp.manifests.get("").get("repositories"));
+        Map<String, Object> api = imp.manifests.get("server-api"), core = imp.manifests.get("server-core");
+        assertEquals("org.example", api.get("group"), "a task's group is not the project's");
+        assertEquals("org.example", core.get("group"));
+        assertEquals(Map.of("com.google.code.gson:gson", "2.15.0"), api.get("runtime"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> runtime = (Map<String, Object>) core.get("runtime");
+        assertEquals(Map.of("version", "*", "exclude", List.of("com.google.code.gson:gson")), runtime.get("workspace:server-api"));
+        assertEquals("4.2.19.Final", runtime.get("io.netty:netty-buffer"));
+        assertEquals(Map.of("version", "4.2.19.Final", "runtimeOnly", true), runtime.get("io.netty:netty-transport-native-epoll:linux-x86_64"));
+        assertEquals(Map.of("version", "4.2.19.Final", "runtimeOnly", true), runtime.get("io.netty:netty-transport-native-epoll:linux-aarch_64"));
+        assertTrue(imp.warnings.stream().noneMatch(w -> w.contains("could not read")), imp.warnings.toString());
+    }
+
+    @Test
+    void stripsCommentsButNotUrls() {
+        assertEquals("maven(\"https://a.b/c\") \nx  \"/* kept */\"", GradleImport.stripComments("maven(\"https://a.b/c\") // gone\nx /* gone */\"/* kept */\""));
+    }
+
     @Test
     void readsJavaVersionsAndMainClasses() {
         assertEquals(17, GradleImport.javaVersion("java { sourceCompatibility = JavaVersion.VERSION_17 }"));
