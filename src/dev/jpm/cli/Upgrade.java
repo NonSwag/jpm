@@ -147,9 +147,7 @@ final class Upgrade {
                 Path p = Path.of(URI.create(url));
                 return Files.isRegularFile(p) ? Fs.read(p).strip() : null;
             }
-            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
-                    .connectTimeout(java.time.Duration.ofSeconds(2))
-                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
+            java.net.http.HttpClient client = dev.jpm.util.Net.client(java.time.Duration.ofSeconds(2)).build();
             java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(URI.create(url))
                     .timeout(java.time.Duration.ofSeconds(3)).header("User-Agent", "jpm").GET().build();
             java.net.http.HttpResponse<String> r = client.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
