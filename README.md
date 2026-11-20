@@ -262,7 +262,9 @@ for Git, a SHA-256 for Maven jars (verified on every install), and its edges. It
 the declared dependencies are unchanged.
 
 **Workspaces.** A root `project.jsonc` with `"workspace": ["api", "impl"]`. Modules depend on each
-other with `"workspace:impl": "*"`, share one version (lockstep) and one lockfile. Outside projects can
+other with `"workspace:impl": "*"`, share one version (lockstep) and one lockfile. Modules inherit
+`java`, `target`, `group`, `license`, `url` and `layout` from the root unless they set them, and the
+root's `javacArgs` and `nativeArgs` come before their own; `repositories` are read from the root only. Outside projects can
 depend only on `public` modules; an `internal` module pulled in by a public one goes on the runtime
 classpath but never the compile classpath, and always comes from the same commit as the module that
 pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own.

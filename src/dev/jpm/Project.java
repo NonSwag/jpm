@@ -91,7 +91,7 @@ public final class Project {
                 if (!Files.exists(md.resolve(Manifest.FILE))) {
                     throw new JpmException(root.file + ": workspace module \"" + rel + "\" has no " + Manifest.FILE);
                 }
-                Manifest m = Manifest.load(md);
+                Manifest m = Manifest.load(md, root);
                 if (m.isWorkspaceRoot()) throw new JpmException(m.file + ": nested workspaces are not supported");
                 modules.add(new Module(p, md, m));
             }
