@@ -180,9 +180,6 @@ public final class GradleImport {
     // ---------------------------------------------------------------- reading the files as text
 
     private static final Pattern QUOTED = Pattern.compile("[\"']([^\"']+)[\"']");
-    private static final Pattern CONF = Pattern.compile(
-            "\\b(api|implementation|compileOnlyApi|compileOnly|runtimeOnly|annotationProcessor|testImplementation|"
-                    + "testCompileOnly|testRuntimeOnly|testAnnotationProcessor)\\b\\s*\\(?\\s*(.+)");
 
     /** Removes {@code name { ... }} blocks (balanced braces) from build script text. */
     static String withoutBlocks(String text, String... names) {
@@ -215,8 +212,8 @@ public final class GradleImport {
     public static Imported runStatic(Path dir, dev.jpm.maven.MavenRepo repo) {
         Imported imp = new Imported("Gradle");
         Map<String, String> props = gradleProperties(dir.resolve("gradle.properties"));
-        Catalog catalog = Catalog.read(dir.resolve("gradle").resolve("libs.versions.toml"));
         String settings = firstExisting(dir, "settings.gradle.kts", "settings.gradle");
+        Catalog catalog = Catalog.read(catalogFile(dir, settings));
         List<GProject> projects = new ArrayList<>();
         GProject root = new GProject();
         root.name = dir.getFileName().toString();
@@ -226,7 +223,8 @@ public final class GradleImport {
         }
         projects.add(root);
         if (settings != null) {
-            Matcher inc = Pattern.compile("(?m)^\\s*include\\s*\\(?(.*)$").matcher(settings);
+            // include("a", ":b") or include 'a' — not includeBuild(...), which is another build
+            Matcher inc = Pattern.compile("(?m)^\\s*include(?:\\s*\\(|\\s+)(.*)$").matcher(stripComments(settings));
             while (inc.find()) {
                 Matcher q = QUOTED.matcher(inc.group(1));
                 while (q.find()) {
@@ -244,8 +242,13 @@ public final class GradleImport {
         // defaults set in allprojects/subprojects blocks, or gradle.properties
         String defGroup = props.get("group"), defVersion = props.get("version");
         if (rootBuild != null) {
-            String g = assignment(rootBuild, "group");
-            String v = assignment(rootBuild, "version");
+            String rb = stripComments(rootBuild);
+            // the root's own settings, then what allprojects {} / subprojects {} set for everyone
+            String g = assignment(topLevel(rb), "group"), v = assignment(topLevel(rb), "version");
+            for (String body : blockBodies(rb, "allprojects", "subprojects")) {
+                if (g == null) g = assignment(topLevel(body), "group");
+                if (v == null) v = assignment(topLevel(body), "version");
+            }
             if (g != null) defGroup = g;
             if (v != null) defVersion = v;
         }
@@ -256,12 +259,13 @@ public final class GradleImport {
             p.version = defVersion;
             if (build == null) continue;
             if (!p.dir.isEmpty()) {
-                String g = assignment(build, "group");
-                String v = assignment(build, "version");
+                // only assignments of the project itself: `group = "verification"` in a task's block is the task's
+                String g = assignment(topLevel(stripComments(build)), "group");
+                String v = assignment(topLevel(stripComments(build)), "version");
                 if (g != null) p.group = g;
                 if (v != null) p.version = v;
             }
-            String noComments = build.replaceAll("(?m)//.*$", "").replaceAll("(?s)/\\*.*?\\*/", "");
+            String noComments = stripComments(build);
             // what the root sets up for subprojects is not about the root itself
             String own = p.dir.isEmpty() ? withoutBlocks(noComments, "subprojects", "allprojects") : noComments;
             p.java = Pattern.compile("\\b(java|java-library|application)\\b|id\\s*\\(?\\s*[\"'](java|java-library|application)[\"']|apply\\s+plugin:\\s*[\"']java")
@@ -269,12 +273,12 @@ public final class GradleImport {
             p.kotlin = noComments.contains("kotlin(\"jvm\")") || noComments.contains("org.jetbrains.kotlin.jvm");
             p.release = javaVersion(noComments);
             p.mainClass = mainClass(noComments);
-            readDependencies(noComments, p, catalog, imp);
+            readDependencies(noComments, p, catalog, accessors(projects), imp);
             readRepositories(noComments, p);
         }
         // Java settings in subprojects {} or allprojects {} of the root apply to every module.
         if (rootBuild != null) {
-            String rb = rootBuild.replaceAll("(?m)//.*$", "");
+            String rb = stripComments(rootBuild);
             boolean shared = rb.contains("subprojects") || rb.contains("allprojects");
             if (shared) {
                 Integer rel = javaVersion(rb);
@@ -377,72 +381,252 @@ public final class GradleImport {
         return m.find() ? m.group(1) : null;
     }
 
-    private static void readDependencies(String build, GProject p, Catalog catalog, Imported imp) {
+    /** Build script text without comments; strings (with the {@code //} of their URLs) are kept. */
+    static String stripComments(String text) {
+        StringBuilder out = new StringBuilder(text.length());
+        int i = 0, n = text.length();
+        while (i < n) {
+            char c = text.charAt(i);
+            if (text.startsWith("\"\"\"", i)) {
+                int end = text.indexOf("\"\"\"", i + 3);
+                end = end < 0 ? n : end + 3;
+                out.append(text, i, end);
+                i = end;
+            } else if (c == '"' || c == '\'') {
+                int j = i + 1;
+                while (j < n && text.charAt(j) != c && text.charAt(j) != '\n') j += text.charAt(j) == '\\' ? 2 : 1;
+                j = Math.min(n, j + 1);
+                out.append(text, i, j);
+                i = j;
+            } else if (text.startsWith("//", i)) {
+                while (i < n && text.charAt(i) != '\n') i++;
+            } else if (text.startsWith("/*", i)) {
+                int end = text.indexOf("*/", i + 2);
+                i = end < 0 ? n : end + 2;
+                out.append(' ');
+            } else {
+                out.append(c);
+                i++;
+            }
+        }
+        return out.toString();
+    }
+
+    /** The text with every {@code { ... }} block taken out: what is set at the top level. */
+    static String topLevel(String text) {
+        StringBuilder out = new StringBuilder();
+        int depth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') depth = Math.max(0, depth - 1);
+            else if (depth == 0) out.append(c);
+        }
+        return out.toString();
+    }
+
+    /** The bodies of {@code name { ... }} blocks. */
+    static List<String> blockBodies(String text, String... names) {
+        List<String> out = new ArrayList<>();
+        for (String name : names) {
+            Matcher m = Pattern.compile("\\b" + name + "\\s*\\{").matcher(text);
+            while (m.find()) {
+                int end = closing(text, m.end() - 1, '{', '}');
+                out.add(text.substring(m.end(), Math.max(m.end(), end)));
+            }
+        }
+        return out;
+    }
+
+    /** The index of the bracket closing the one at {@code open}, or the end of the text. */
+    private static int closing(String text, int open, char o, char c) {
+        int depth = 0;
+        for (int i = open; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '"' || ch == '\'') {
+                int j = i + 1;
+                while (j < text.length() && text.charAt(j) != ch && text.charAt(j) != '\n') j += text.charAt(j) == '\\' ? 2 : 1;
+                i = j;
+                continue;
+            }
+            if (ch == o) depth++;
+            else if (ch == c && --depth == 0) return i;
+        }
+        return text.length();
+    }
+
+    /** The version catalog: the file settings name in versionCatalogs { ... from(files("...")) }, else gradle/libs.versions.toml. */
+    static Path catalogFile(Path dir, String settings) {
+        if (settings != null) {
+            Matcher m = Pattern.compile("(?s)versionCatalogs\\s*\\{.*?(?:create|register)\\s*\\(\\s*[\"']libs[\"']\\s*\\)\\s*\\{[^}]*?from\\s*\\(\\s*files\\s*\\(\\s*[\"']([^\"']+)[\"']")
+                    .matcher(stripComments(settings));
+            if (m.find()) return dir.resolve(m.group(1)).normalize();
+        }
+        return dir.resolve("gradle").resolve("libs.versions.toml");
+    }
+
+    /** Typesafe project accessors ({@code projects.fidorialApi}, {@code projects.libs.coreUtil}) to project paths. */
+    static Map<String, String> accessors(List<GProject> projects) {
+        Map<String, String> out = new LinkedHashMap<>();
+        for (GProject p : projects) {
+            if (p.path.equals(":")) continue;
+            StringBuilder a = new StringBuilder();
+            for (String seg : p.path.substring(1).split(":")) {
+                if (a.length() > 0) a.append('.');
+                a.append(camel(seg));
+            }
+            out.put(a.toString(), p.path);
+        }
+        return out;
+    }
+
+    private static String camel(String name) {
+        StringBuilder sb = new StringBuilder();
+        boolean up = false;
+        for (char c : name.toCharArray()) {
+            if (c == '-' || c == '_' || c == '.' || c == ' ') {
+                up = sb.length() > 0;
+                continue;
+            }
+            sb.append(up ? Character.toUpperCase(c) : c);
+            up = false;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Repeats the bodies of {@code for (x in listOf("a", "b")) { ... }} (Groovy: {@code for (x in ['a', 'b'])}) once
+     * per value, with {@code x} replaced by the quoted value: dependencies declared in loops.
+     */
+    static String expandLoops(String block) {
+        Pattern loop = Pattern.compile("\\bfor\\s*\\(\\s*(?:val\\s+|def\\s+)?(\\w+)\\s+in\\s+(?:listOf|setOf|arrayOf)?\\s*[(\\[]([^)\\]]*)[)\\]]\\s*\\)\\s*\\{");
+        for (int guard = 0; guard < 50; guard++) {
+            Matcher m = loop.matcher(block);
+            if (!m.find()) return block;
+            int end = closing(block, m.end() - 1, '{', '}');
+            String body = block.substring(m.end(), Math.min(end, block.length()));
+            StringBuilder rep = new StringBuilder();
+            Matcher v = QUOTED.matcher(m.group(2));
+            while (v.find()) rep.append(body.replaceAll("\\b" + Pattern.quote(m.group(1)) + "\\b", Matcher.quoteReplacement("\"" + v.group(1) + "\""))).append('\n');
+            block = block.substring(0, m.start()) + rep + block.substring(Math.min(block.length(), end + 1));
+        }
+        return block;
+    }
+
+    private static final Pattern CONF_CALL = Pattern.compile(
+            "(?<![\"'\\w.$])(api|implementation|compileOnlyApi|compileOnly|runtimeOnly|annotationProcessor|testImplementation|"
+                    + "testCompileOnly|testRuntimeOnly|testAnnotationProcessor)\\b(?:\\s*(\\()|[ \\t]+(?=[\"'\\w])(?![\\w.]*\\s*[=(]))");
+
+    private static void readDependencies(String build, GProject p, Catalog catalog, Map<String, String> accessors, Imported imp) {
         Matcher blocks = Pattern.compile("dependencies\\s*\\{").matcher(build);
         while (blocks.find()) {
-            int start = blocks.end(), depth = 1, i = start;
-            while (i < build.length() && depth > 0) {
-                char c = build.charAt(i++);
-                if (c == '{') depth++;
-                else if (c == '}') depth--;
-            }
-            String block = build.substring(start, Math.max(start, i - 1));
+            int start = blocks.end(), end = closing(build, blocks.end() - 1, '{', '}');
             // skip dependency blocks of buildscript {}, which are for the build itself
             String before = build.substring(Math.max(0, blocks.start() - 200), blocks.start());
             if (before.matches("(?s).*buildscript\\s*\\{[^}]*$")) continue;
-            for (String line : block.split("\r?\n")) {
-                Matcher m = CONF.matcher(line.strip());
-                if (!m.find()) continue;
-                String conf = m.group(1), arg = m.group(2).strip();
-                List<GDep> list = p.deps.computeIfAbsent(conf, k -> new ArrayList<>());
-                if (arg.startsWith("platform(") || arg.startsWith("enforcedPlatform(")) {
-                    String inner = arg.substring(arg.indexOf('(') + 1).strip();
-                    String[] c = null;
-                    Matcher lib = Pattern.compile("^(libs\\.[\\w.]+)").matcher(inner);
-                    Matcher q = QUOTED.matcher(inner);
-                    if (lib.find()) c = catalog.library(lib.group(1).substring(5));
-                    else if (q.find()) c = q.group(1).split(":").length >= 3 ? q.group(1).split(":") : null;
-                    if (c == null) list.add(new GDep(null, null, null, null, "platform", arg));
-                    else list.add(new GDep(null, c[0], c[1], c[2], "platform", arg));
-                    continue;
+            String block = expandLoops(build.substring(start, Math.max(start, end)));
+            Matcher m = CONF_CALL.matcher(block);
+            int from = 0;
+            while (m.find(from)) {
+                String conf = m.group(1), arg;
+                int next;
+                if (m.group(2) != null) {
+                    int close = closing(block, m.end() - 1, '(', ')');
+                    arg = block.substring(m.end(), Math.min(close, block.length())).strip();
+                    next = Math.min(block.length(), close + 1);
+                } else {
+                    // Groovy without parentheses: to the end of the line
+                    int eol = block.indexOf('\n', m.end());
+                    eol = eol < 0 ? block.length() : eol;
+                    arg = block.substring(m.end(), eol).strip();
+                    next = eol;
                 }
-                Matcher proj = Pattern.compile("project\\s*\\(\\s*(?:path\\s*[:=]\\s*)?[\"']([^\"']+)[\"']").matcher(arg);
-                if (proj.find()) {
-                    list.add(new GDep(proj.group(1), null, null, null, null, arg));
-                    continue;
-                }
-                Matcher lib = Pattern.compile("^(libs\\.[\\w.]+)").matcher(arg);
-                if (lib.find()) {
-                    String accessor = lib.group(1).substring(5);
-                    if (accessor.startsWith("bundles.")) {
-                        List<String[]> bundle = catalog.bundle(accessor.substring(8));
-                        if (bundle == null) imp.warn(p.dir, "version catalog bundle " + accessor + " not found");
-                        else for (String[] c : bundle) list.add(new GDep(null, c[0], c[1], c[2], null, arg));
-                    } else {
-                        String[] c = catalog.library(accessor);
-                        if (c == null) imp.warn(p.dir, "version catalog entry libs." + accessor + " not found");
-                        else list.add(new GDep(null, c[0], c[1], c[2], null, arg));
+                // a configuration block after the call: implementation(x) { exclude(group = "g", module = "m") }
+                List<String> excludes = new ArrayList<>();
+                Matcher cfg = Pattern.compile("\\G\\s*\\{").matcher(block);
+                if (cfg.find(next)) {
+                    int close = closing(block, cfg.end() - 1, '{', '}');
+                    String body = block.substring(cfg.end(), Math.min(close, block.length()));
+                    Matcher ex = Pattern.compile("exclude\\s*\\(?\\s*(?:group\\s*[:=]\\s*[\"']([^\"']+)[\"'])?\\s*,?\\s*(?:module\\s*[:=]\\s*[\"']([^\"']+)[\"'])?").matcher(body);
+                    while (ex.find()) {
+                        if (ex.group(1) == null && ex.group(2) == null) continue;
+                        excludes.add((ex.group(1) != null ? ex.group(1) : "*") + ":" + (ex.group(2) != null ? ex.group(2) : "*"));
                     }
-                    continue;
+                    next = Math.min(block.length(), close + 1);
                 }
-                Matcher q = QUOTED.matcher(arg);
-                if (q.find() && q.start() <= 1) {
-                    String[] parts = q.group(1).split(":");
-                    if (parts.length >= 2) {
-                        list.add(new GDep(null, parts[0], parts[1], parts.length >= 3 ? parts[2] : null, null, arg,
-                                parts.length >= 4 ? parts[3] : null, List.of()));
-                        continue;
-                    }
-                }
-                Matcher map = Pattern.compile("group\\s*[:=]\\s*[\"']([^\"']+)[\"']\\s*,\\s*name\\s*[:=]\\s*[\"']([^\"']+)[\"']"
-                        + "(?:\\s*,\\s*version\\s*[:=]\\s*[\"']([^\"']+)[\"'])?").matcher(arg);
-                if (map.find()) {
-                    list.add(new GDep(null, map.group(1), map.group(2), map.group(3), null, arg));
-                    continue;
-                }
-                imp.warn(p.dir, "could not read dependency `" + conf + " " + arg + "`");
+                from = next;
+                readDependency(conf, arg, excludes, p, catalog, accessors, imp);
             }
         }
+    }
+
+    private static void readDependency(String conf, String arg, List<String> excludes, GProject p, Catalog catalog,
+                                       Map<String, String> accessors, Imported imp) {
+        List<GDep> list = p.deps.computeIfAbsent(conf, k -> new ArrayList<>());
+        String classifier = null;
+        // variantOf(libs.x) { classifier("linux-x86_64") }
+        Matcher variant = Pattern.compile("^variantOf\\s*\\(\\s*(libs\\.[\\w.]+)\\s*\\)\\s*\\{[^}]*?classifier\\s*\\(?\\s*(?:[\"']([^\"']+)[\"']|(\\w+))").matcher(arg);
+        if (variant.find()) {
+            if (variant.group(2) == null) {
+                imp.warn(p.dir, "could not read the classifier of `" + conf + "(" + arg + ")`");
+                return;
+            }
+            classifier = variant.group(2);
+            arg = variant.group(1);
+        }
+        if (arg.startsWith("platform(") || arg.startsWith("enforcedPlatform(")) {
+            String inner = arg.substring(arg.indexOf('(') + 1).strip();
+            String[] c = null;
+            Matcher lib = Pattern.compile("^(libs\\.[\\w.]+)").matcher(inner);
+            Matcher q = QUOTED.matcher(inner);
+            if (lib.find()) c = catalog.library(lib.group(1).substring(5));
+            else if (q.find()) c = q.group(1).split(":").length >= 3 ? q.group(1).split(":") : null;
+            if (c == null) list.add(new GDep(null, null, null, null, "platform", arg));
+            else list.add(new GDep(null, c[0], c[1], c[2], "platform", arg));
+            return;
+        }
+        Matcher proj = Pattern.compile("^project\\s*\\(\\s*(?:path\\s*[:=]\\s*)?[\"']([^\"']+)[\"']").matcher(arg);
+        if (proj.find()) {
+            list.add(new GDep(proj.group(1), null, null, null, null, arg, null, excludes));
+            return;
+        }
+        Matcher acc = Pattern.compile("^projects\\.([\\w.]+)$").matcher(arg);
+        if (acc.find()) {
+            String path = accessors.get(acc.group(1));
+            if (path == null) imp.warn(p.dir, "no project for the accessor " + arg);
+            else list.add(new GDep(path, null, null, null, null, arg, null, excludes));
+            return;
+        }
+        Matcher lib = Pattern.compile("^(libs\\.[\\w.]+)$").matcher(arg);
+        if (lib.find()) {
+            String accessor = lib.group(1).substring(5);
+            if (accessor.startsWith("bundles.")) {
+                List<String[]> bundle = catalog.bundle(accessor.substring(8));
+                if (bundle == null) imp.warn(p.dir, "version catalog bundle " + accessor + " not found");
+                else for (String[] c : bundle) list.add(new GDep(null, c[0], c[1], c[2], null, arg, null, excludes));
+            } else {
+                String[] c = catalog.library(accessor);
+                if (c == null) imp.warn(p.dir, "version catalog entry libs." + accessor + " not found");
+                else list.add(new GDep(null, c[0], c[1], c[2], null, arg, classifier, excludes));
+            }
+            return;
+        }
+        Matcher q = QUOTED.matcher(arg);
+        if (q.find() && q.start() <= 1) {
+            String[] parts = q.group(1).split(":");
+            if (parts.length >= 2) {
+                list.add(new GDep(null, parts[0], parts[1], parts.length >= 3 ? parts[2] : null, null, arg,
+                        parts.length >= 4 ? parts[3] : null, excludes));
+                return;
+            }
+        }
+        Matcher map = Pattern.compile("group\\s*[:=]\\s*[\"']([^\"']+)[\"']\\s*,\\s*name\\s*[:=]\\s*[\"']([^\"']+)[\"']"
+                + "(?:\\s*,\\s*version\\s*[:=]\\s*[\"']([^\"']+)[\"'])?").matcher(arg);
+        if (map.find()) {
+            list.add(new GDep(null, map.group(1), map.group(2), map.group(3), null, arg, null, excludes));
+            return;
+        }
+        imp.warn(p.dir, "could not read dependency `" + conf + "(" + arg + ")`");
     }
 
     private static void readRepositories(String build, GProject p) {
@@ -471,8 +655,29 @@ public final class GradleImport {
         static Catalog parse(String text) {
             Catalog c = new Catalog();
             String section = "";
+            List<String> lines = new ArrayList<>();
+            // join values spanning lines (multi-line arrays and inline tables) into one line
+            StringBuilder pending = null;
+            int open = 0;
             for (String raw : text.split("\r?\n")) {
-                String line = raw.replaceAll("\\s+#.*$", "").strip();
+                String l = raw.replaceAll("\\s+#.*$", "").strip();
+                if (pending != null) {
+                    pending.append(' ').append(l);
+                } else {
+                    pending = new StringBuilder(l);
+                }
+                for (char ch : l.toCharArray()) {
+                    if (ch == '[' || ch == '{') open++;
+                    else if (ch == ']' || ch == '}') open--;
+                }
+                if (open <= 0 || l.startsWith("[") && l.endsWith("]") && !l.contains("=")) {
+                    lines.add(pending.toString());
+                    pending = null;
+                    open = 0;
+                }
+            }
+            if (pending != null) lines.add(pending.toString());
+            for (String line : lines) {
                 if (line.isEmpty() || line.startsWith("#")) continue;
                 if (line.startsWith("[")) {
                     section = line.replaceAll("[\\[\\]\\s]", "");
@@ -624,7 +829,8 @@ public final class GradleImport {
                         if (name == null) {
                             imp.warn(where, "dependency on unknown project " + d.project + " skipped");
                         } else {
-                            target.put("workspace:" + name, "*");
+                            target.put("workspace:" + name, d.excludes == null || d.excludes.isEmpty() ? "*"
+                                    : MavenImport.depValue("*", d.excludes, false, false));
                         }
                         continue;
                     }
