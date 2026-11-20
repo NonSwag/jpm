@@ -7,7 +7,6 @@ import dev.jpm.version.Version;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -43,11 +42,7 @@ public final class MavenRepo {
         this.repos = r;
         this.cache = Fs.home().resolve("repository");
         this.offline = Fs.offline();
-        this.http = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .proxy(ProxySelector.getDefault())
-                .connectTimeout(Duration.ofSeconds(20))
-                .build();
+        this.http = dev.jpm.util.Net.client(Duration.ofSeconds(20)).build();
     }
 
     private static String slash(String s) {
