@@ -89,6 +89,26 @@ public final class Modules {
         return null;
     }
 
+    /** The name in a jar's module-info.class (also under META-INF/versions/N/), or null: not an automatic name. */
+    public static String descriptorName(Path jar) {
+        if (!Files.isRegularFile(jar)) return null;
+        try (JarFile jf = new JarFile(jar.toFile())) {
+            ZipEntry mi = jf.getEntry("module-info.class");
+            if (mi == null) {
+                for (var en = jf.entries(); en.hasMoreElements(); ) {
+                    ZipEntry e = en.nextElement();
+                    if (e.getName().matches("META-INF/versions/\\d+/module-info\\.class")) { mi = e; break; }
+                }
+            }
+            if (mi == null) return null;
+            try (var in = jf.getInputStream(mi)) {
+                return moduleNameFromBytes(in.readAllBytes());
+            }
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     private static String nameFromClass(Path moduleInfoClass) {
         try {
             return moduleNameFromBytes(Files.readAllBytes(moduleInfoClass));
