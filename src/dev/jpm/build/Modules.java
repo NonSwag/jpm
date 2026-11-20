@@ -97,12 +97,68 @@ public final class Modules {
         }
     }
 
-    /** Reads the module name from a module-info.class (its Module attribute's first entry). */
+    /**
+     * Reads the module name from a module-info.class: the {@code Module} attribute's {@code module_name_index}.
+     *
+     * <p>Parsed by hand rather than with {@link java.lang.module.ModuleDescriptor#read}, which rejects class
+     * files newer than the JDK jpm runs on: the native binary is built with one JDK, and a module compiled
+     * for a newer Java would read as no module at all. The constant pool and the {@code Module} attribute
+     * have kept their format since class file 53 (Java 9), and only the name is needed.
+     */
     static String moduleNameFromBytes(byte[] b) {
         try {
-            java.lang.module.ModuleDescriptor d = java.lang.module.ModuleDescriptor.read(java.nio.ByteBuffer.wrap(b));
-            return d.name();
-        } catch (RuntimeException e) {
+            java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(b));
+            if (in.readInt() != 0xCAFEBABE) return null;
+            in.readUnsignedShort(); // minor
+            if (in.readUnsignedShort() < 53) return null;
+            int count = in.readUnsignedShort();
+            String[] utf8 = new String[count];
+            int[] moduleNameIndex = new int[count];
+            for (int i = 1; i < count; i++) {
+                int tag = in.readUnsignedByte();
+                switch (tag) {
+                    case 1 -> utf8[i] = in.readUTF();
+                    case 7, 8, 16, 20 -> in.skipNBytes(2);
+                    case 19 -> moduleNameIndex[i] = in.readUnsignedShort();
+                    case 15 -> in.skipNBytes(3);
+                    case 3, 4, 9, 10, 11, 12, 17, 18 -> in.skipNBytes(4);
+                    case 5, 6 -> {
+                        in.skipNBytes(8);
+                        i++; // takes two entries
+                    }
+                    default -> {
+                        return null;
+                    }
+                }
+            }
+            in.skipNBytes(6); // access_flags, this_class, super_class
+            in.skipNBytes(2L * in.readUnsignedShort()); // interfaces
+            for (int members = 0; members < 2; members++) { // fields, methods: none in module-info, but allowed
+                int n = in.readUnsignedShort();
+                for (int i = 0; i < n; i++) {
+                    in.skipNBytes(6);
+                    int attrs = in.readUnsignedShort();
+                    for (int a = 0; a < attrs; a++) {
+                        in.skipNBytes(2);
+                        in.skipNBytes(Integer.toUnsignedLong(in.readInt()));
+                    }
+                }
+            }
+            int attrs = in.readUnsignedShort();
+            for (int a = 0; a < attrs; a++) {
+                int nameIndex = in.readUnsignedShort();
+                long length = Integer.toUnsignedLong(in.readInt());
+                if (nameIndex < count && "Module".equals(utf8[nameIndex])) {
+                    int module = in.readUnsignedShort();
+                    if (module <= 0 || module >= count) return null;
+                    int name = moduleNameIndex[module];
+                    if (name <= 0 || name >= count || utf8[name] == null) return null;
+                    return utf8[name];
+                }
+                in.skipNBytes(length);
+            }
+            return null;
+        } catch (java.io.IOException | RuntimeException e) {
             return null;
         }
     }
