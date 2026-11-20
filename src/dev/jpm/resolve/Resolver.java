@@ -78,7 +78,8 @@ public final class Resolver {
     public Resolver(Project project, MavenRepo repo, Graph previous, Set<String> unlocked, boolean unlockAll) {
         this.project = project;
         this.roots = new ArrayList<>();
-        for (Project.Module m : project.modules) {
+        // isolated modules are resolved on their own, see Install
+        for (Project.Module m : project.sharedModules()) {
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 if (d.key().isWorkspace()) continue;
                 validateSpec(d);
@@ -124,7 +125,7 @@ public final class Resolver {
         Hash h = new Hash().add("v1");
         for (String r : project.root.repositories) h.add("repo " + r);
         for (Project.Module m : project.modules) {
-            h.add("module " + m.name());
+            h.add("module " + m.name() + (m.manifest.isolated ? " isolated" : ""));
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 h.add(d.scope().key + " " + d.key() + " " + d.spec() + " " + d.exclusions() + (d.runtimeOnly() ? " rt" : ""));
             }
@@ -245,7 +246,7 @@ public final class Resolver {
 
     /** Adds LOCAL packages for the project's own modules so classpaths can be walked through them. */
     public static void addLocal(Graph g, Project project) {
-        for (Project.Module m : project.modules) {
+        for (Project.Module m : project.sharedModules()) {
             Graph.Pkg p = new Graph.Pkg(m.id(), Graph.Kind.LOCAL);
             p.version = m.version();
             p.dir = m.dir;

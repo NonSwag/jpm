@@ -197,7 +197,7 @@ Other fields:
 - `package`: `"jar"` (the default) or `"bundle"`, see [Bundles](#bundles-jar-in-jar-isolation)
 - `layout`: `"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`, `src/test/resources`
   (set by `jpm import`)
-- `group`; `visibility` (`public`/`internal`, workspaces); `workspace` (module list, on a workspace root)
+- `group`; `visibility` (`public`/`internal`, workspaces); `isolated` (a workspace module with its own resolution); `workspace` (module list, on a workspace root)
 - `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
 - `javacArgs`, `nativeArgs` (extra flags for javac and native-image)
 - `description`, `license`, `url` (used by publishing)
@@ -265,7 +265,10 @@ the declared dependencies are unchanged.
 other with `"workspace:impl": "*"`, share one version (lockstep) and one lockfile. Outside projects can
 depend only on `public` modules; an `internal` module pulled in by a public one goes on the runtime
 classpath but never the compile classpath, and always comes from the same commit as the module that
-pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own.
+pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own. A module with `"isolated": true` is
+resolved in a graph of its own (its own section of `project.lock`), so its dependencies never change
+the versions the other modules get: for linters, formatters and code generators. Nothing can depend
+on an isolated module, and it cannot depend on workspace modules.
 
 **Builds** call the selected JDK's `javac`, with `--release` only when it is newer than the module's
 target (so an API added later is a compile error, not a runtime crash). On a JDK of the target version

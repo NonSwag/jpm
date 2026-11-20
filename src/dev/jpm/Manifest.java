@@ -26,7 +26,7 @@ public final class Manifest {
     public static final String SCHEMA_URL = "https://github.com/java-package-manager/jpm/releases/latest/download/project.schema.json";
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
-            "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
+            "define", "scripts", "hooks", "patches", "workspace", "visibility", "isolated", "repositories", "defineClass",
             "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
@@ -77,6 +77,8 @@ public final class Manifest {
     public final Map<String, String> patches;
     public final List<String> workspace;
     public final String visibility;
+    /** Resolved in its own graph, so its dependencies do not move the other modules' versions. */
+    public final boolean isolated;
     public final List<String> repositories;
     public final String defineClass;
     public final List<String> javacArgs;
@@ -117,6 +119,9 @@ public final class Manifest {
         if (!visibility.equals("public") && !visibility.equals("internal")) {
             throw err(root.get("visibility"), "visibility must be \"public\" or \"internal\"");
         }
+        Jsonc.Node iso = root.get("isolated");
+        if (iso != null && !(iso.value instanceof Boolean)) throw err(iso, "isolated must be true or false");
+        this.isolated = iso != null && Boolean.TRUE.equals(iso.value);
         this.defineClass = str("defineClass", false);
 
         Map<String, String> m = new LinkedHashMap<>();

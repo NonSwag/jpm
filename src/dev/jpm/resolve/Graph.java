@@ -89,6 +89,9 @@ public final class Graph {
 
     public final Map<String, Pkg> pkgs = new TreeMap<>();
 
+    /** The graphs of isolated workspace modules, by module name; each is resolved on its own. */
+    public final Map<String, Graph> isolated = new TreeMap<>();
+
     public Pkg get(String id) {
         return pkgs.get(id);
     }

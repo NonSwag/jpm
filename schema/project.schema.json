@@ -191,6 +191,11 @@
       },
       "uniqueItems": true
     },
+    "isolated": {
+      "type": "boolean",
+      "default": false,
+      "description": "A workspace module resolved in a graph of its own (its own section of project.lock): its dependencies never change the versions other modules get. Meant for tooling and code generators; no module can depend on it, and it cannot depend on workspace modules."
+    },
     "visibility": {
       "enum": [
         "public",
