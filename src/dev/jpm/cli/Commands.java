@@ -48,7 +48,16 @@ import java.util.Set;
 
 /** Implementations of the CLI commands. */
 final class Commands {
-    private final Path cwd = Path.of("").toAbsolutePath();
+    private final Path cwd;
+
+    Commands() {
+        this(Path.of("").toAbsolutePath());
+    }
+
+    /** For tests: commands run as if started in {@code cwd}. */
+    Commands(Path cwd) {
+        this.cwd = cwd;
+    }
 
     // ---------------------------------------------------------------- helpers
 
@@ -772,9 +781,85 @@ final class Commands {
     }
 
     /**
+     * {@code --classpath}: each of a module's classpaths (compile, processor, runtime, testCompile,
+     * testRuntime) as packages in classpath order. A package has its id, kind (maven, git, patched or
+     * workspace), version, Maven coordinates, its jars (for workspace modules, their classes directory and
+     * jar) and its dependency edges as in project.lock. No sources jars are
+     * downloaded.
+     */
+    private Map<String, Object> classpaths(Ctx c, Builder b, Project.Module m) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Builder.Cp cp : Builder.Cp.values()) {
+            String name = switch (cp) {
+                case COMPILE -> "compile";
+                case PROCESSOR -> "processor";
+                case RUNTIME -> "runtime";
+                case TEST_COMPILE -> "testCompile";
+                case TEST_RUNTIME -> "testRuntime";
+            };
+            List<Object> pkgs = new ArrayList<>();
+            for (String id : b.classpathIds(m, cp)) {
+                Graph.Pkg p = c.graph.get(id);
+                if (p == null) continue;
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("id", p.id);
+                if (p.kind == Graph.Kind.LOCAL) {
+                    Project.Module sib = c.project.module(p.id.substring("workspace:".length()));
+                    d.put("kind", "workspace");
+                    d.put("module", sib.name());
+                    if (sib.manifest.group != null) d.put("group", sib.manifest.group);
+                    d.put("artifact", sib.name());
+                    d.put("version", sib.version());
+                    d.put("classes", Builder.classesDir(sib).toString());
+                    d.put("jar", b.jarPath(sib).toString());
+                } else {
+                    boolean patched = b.isPatched(p.id);
+                    d.put("kind", patched ? "patched" : p.kind == Graph.Kind.GIT ? "git" : "maven");
+                    d.put("version", p.version);
+                    if (p.kind == Graph.Kind.MAVEN) {
+                        d.put("group", p.group());
+                        d.put("artifact", p.name());
+                        if (p.classifier() != null) d.put("classifier", p.classifier());
+                    } else {
+                        if (p.commit != null) d.put("commit", p.commit);
+                        if (p.tag != null) d.put("tag", p.tag);
+                    }
+                    List<String> jars = b.paths(p.id, m).stream().map(Path::toString).toList();
+                    d.put("jars", jars);
+                    if (jars.size() == 1) d.put("jar", jars.get(0));
+                }
+                List<Object> edges = new ArrayList<>();
+                for (Graph.Edge e : p.deps.values()) {
+                    Map<String, Object> ed = new LinkedHashMap<>();
+                    ed.put("id", e.target());
+                    ed.put("scope", e.compileOnly() ? "provided" : e.runtimeOnly() ? "runtime" : "compile");
+                    if (!e.exclusions().isEmpty()) ed.put("exclude", new ArrayList<>(new java.util.TreeSet<>(e.exclusions())));
+                    edges.add(ed);
+                }
+                d.put("dependencies", edges);
+                pkgs.add(d);
+            }
+            out.put(name, pkgs);
+        }
+        return out;
+    }
+
+    /** A module's resolved define values, by name (what its defines class holds). */
+    private static Map<String, Object> defines(Builder b, Project.Module m) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            for (dev.jpm.build.Defines.Value v : b.defineValues(m)) out.put(v.name(), v.value());
+        } catch (JpmException e) {
+            out.put("$error", e.getMessage());
+        }
+        return out;
+    }
+
+    /**
      * {@code jpm info --json}: the project as extensions see it. The output is a stable contract: fields are
      * only ever added. With {@code --classpath}, each module also lists its compile classpath (which may
-     * build Git dependencies first). With {@code --ide}, each module also lists its test folders, the folders
+     * build Git dependencies first), every classpath as packages with coordinates, jars and edges (see
+     * {@link #classpaths}), and its resolved define values. With {@code --ide}, each module also lists its test folders, the folders
      * an IDE should exclude, its scripts, the folder of its generated sources (written on the way, so the
      * defines class resolves without a build), and {@code ideDependencies}: every package on its classpaths with
      * the narrowest scope it is needed in, workspace modules as module references (nothing of the project is
@@ -864,6 +949,8 @@ final class Commands {
             mod.put("extensions", mf.extensions);
             if (withClasspath) {
                 mod.put("compileClasspath", b.classpath(m, Builder.Cp.COMPILE).stream().map(Path::toString).toList());
+                mod.put("classpaths", classpaths(c, b, m));
+                mod.put("defines", defines(b, m));
             }
             if (ide) {
                 mod.put("testDir", m.testDir().toString());
