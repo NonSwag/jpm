@@ -295,7 +295,12 @@ already set in the process environment win over all files, so CI secrets are nev
 **Patches.** `jpm patch <dep>` unpacks the Git checkout or the Maven sources jar into
 `.cache/patch/<name>` as a Git repo; `jpm patch --commit <dep>` writes the diff to `patches/` and
 records it in the manifest. Git dependencies are patched before they are built. For Maven jars only the
-changed classes are recompiled and swapped in. If a patch no longer applies, the build fails.
+changed classes are recompiled and swapped in. If a patch no longer applies, the build fails. A patch
+can also be an object, `{ "file": "patches/x.patch", "dependencies": { "net.kyori:adventure-api": "5.2.0" },
+"release": 25 }`: `dependencies` are compile-only for the patched classes (resolved and locked with the
+project, never on anyone's classpath), and `release` compiles them for a newer Java than the library's
+own bytecode level. Modular jars are patched as their module (`--patch-module`), so a patch can change
+`module-info.java` and use package-private members.
 
 **Tests** run on the JUnit Platform console launcher matching the resolved platform version; any
 platform engine works. `jpm test com.example.FooTest`, `jpm test 'com.example.*'` or

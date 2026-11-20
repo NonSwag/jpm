@@ -86,11 +86,29 @@ public final class Resolver {
                 roots.add(new Root(m.id(), d.key(), d.spec(), d.exclusions()));
             }
         }
+        // compile-only dependencies of patches: resolved with the project, so their versions agree with it
+        // and are locked, but on no module's classpath (only the patched classes are compiled against them)
+        for (Map.Entry<String, Manifest> e : patchManifests(project).entrySet()) {
+            for (Manifest.PatchOptions o : e.getValue().patchOptions.values()) {
+                for (Manifest.Dependency d : o.dependencies()) {
+                    validateSpec(d);
+                    roots.add(new Root(e.getKey(), d.key(), d.spec(), d.exclusions()));
+                }
+            }
+        }
         this.repo = repo;
         this.poms = new Pom.Loader(repo);
         this.previous = previous;
         this.unlocked = unlocked;
         this.unlockAll = unlockAll;
+    }
+
+    /** The manifests that may hold patches, by the id their patch dependencies are requested from. */
+    private static Map<String, Manifest> patchManifests(Project project) {
+        Map<String, Manifest> out = new LinkedHashMap<>();
+        if (project.root.isWorkspaceRoot()) out.put("workspace root", project.root);
+        for (Project.Module m : project.modules) out.put(m.id(), m.manifest);
+        return out;
     }
 
     /** Resolves explicit roots without a project (tools, a dependency's own build dependencies). */
@@ -128,6 +146,13 @@ public final class Resolver {
             h.add("module " + m.name() + (m.manifest.isolated ? " isolated" : ""));
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 h.add(d.scope().key + " " + d.key() + " " + d.spec() + " " + d.exclusions() + (d.runtimeOnly() ? " rt" : ""));
+            }
+        }
+        for (Map.Entry<String, Manifest> e : patchManifests(project).entrySet()) {
+            for (Map.Entry<String, Manifest.PatchOptions> po : e.getValue().patchOptions.entrySet()) {
+                for (Manifest.Dependency d : po.getValue().dependencies()) {
+                    h.add("patch " + e.getKey() + " " + po.getKey() + " " + d.key() + " " + d.spec() + " " + d.exclusions());
+                }
             }
         }
         return h.hex().substring(0, 32);

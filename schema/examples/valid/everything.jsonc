@@ -33,7 +33,10 @@
   "defineClass": "com.example.generated.Build",
   "scripts": { "format": "scripts/format.sh", "upload-mappings": "scripts/UploadMappings.java" },
   "hooks": { "prebuild": "format", "postbuild:release": "upload-mappings" },
-  "patches": { "com.example:old-lib": "patches/old-lib.patch" },
+  "patches": {
+    "com.example:old-lib": "patches/old-lib.patch",
+    "com.example:other-lib": { "file": "patches/other-lib.patch", "dependencies": { "com.example:helper": "1.0.0" }, "release": 21 }
+  },
   "visibility": "internal",
   "repositories": ["https://repo.example.com/releases", "file:///opt/repo"],
   "javacArgs": ["-Xlint:all"],

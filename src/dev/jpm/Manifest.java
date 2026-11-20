@@ -47,6 +47,13 @@ public final class Manifest {
      * {@code {"version": "...", "exclude": [...], "runtimeOnly": true}}. {@code api}: a dev dependency that
      * consumers compile against too (Gradle's compileOnlyApi); never at run time.
      */
+    /**
+     * Options of a patch: {@code dependencies} are compile-only for the patched classes (resolved with the
+     * project, never on anyone's runtime classpath); {@code release} compiles them for a newer Java than
+     * the library's own bytecode level.
+     */
+    public record PatchOptions(List<Dependency> dependencies, Integer release) {}
+
     public record Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly, boolean api) {
         public Dependency(DepKey key, String spec, Scope scope, int line) {
             this(key, spec, scope, line, Set.of(), false, false);
@@ -74,7 +81,10 @@ public final class Manifest {
     public final Map<String, Map<String, Object>> libraryDefines;
     public final Map<String, String> scripts;
     public final Map<String, String> hooks;
+    /** Patched dependency to its patch file. */
     public final Map<String, String> patches;
+    /** Patched dependency to the options of its patch (a patch given as an object); absent for a plain path. */
+    public final Map<String, PatchOptions> patchOptions;
     public final List<String> workspace;
     public final String visibility;
     /** Resolved in its own graph, so its dependencies do not move the other modules' versions. */
@@ -187,7 +197,53 @@ public final class Manifest {
 
         this.scripts = stringMap("scripts");
         this.hooks = stringMap("hooks");
-        this.patches = stringMap("patches");
+        Map<String, String> pf = new LinkedHashMap<>();
+        Map<String, PatchOptions> po = new LinkedHashMap<>();
+        Jsonc.Node pn = root.get("patches");
+        if (pn != null) {
+            if (!pn.isObject()) throw err(pn, "patches must be an object of dependency to patch file");
+            for (Jsonc.Member e : pn.members.values()) {
+                if (e.value.isString()) {
+                    pf.put(e.key, (String) e.value.value);
+                    continue;
+                }
+                if (!e.value.isObject()) {
+                    throw err(e.value, "patches." + e.key + " must be a patch file or {\"file\": ..., \"dependencies\": {...}, \"release\": N}");
+                }
+                for (String k : e.value.members.keySet()) {
+                    if (!Set.of("file", "dependencies", "release").contains(k)) throw err(e.value.get(k), "unknown patch option \"" + k + "\"");
+                }
+                Jsonc.Node f = e.value.get("file");
+                if (f == null || !f.isString()) throw err(e.value, "patches." + e.key + " needs a \"file\"");
+                pf.put(e.key, (String) f.value);
+                List<Dependency> pd = new ArrayList<>();
+                Jsonc.Node dn2 = e.value.get("dependencies");
+                if (dn2 != null) {
+                    if (!dn2.isObject()) throw err(dn2, "patches." + e.key + ".dependencies must be an object of dependency to version");
+                    for (Jsonc.Member d : dn2.members.values()) {
+                        DepKey key;
+                        try {
+                            key = DepKey.parse(d.key);
+                        } catch (JpmException ex) {
+                            throw new JpmException(file + ":" + line(d.keyStart) + ": " + ex.getMessage());
+                        }
+                        if (key.isWorkspace()) throw err(d.value, "patch dependencies cannot be workspace modules");
+                        pd.add(dependency(key, d, Scope.DEV));
+                    }
+                }
+                Integer release = null;
+                Jsonc.Node rn = e.value.get("release");
+                if (rn != null) {
+                    if (!(rn.value instanceof BigDecimal bd) || bd.scale() > 0 || bd.intValue() < 8) {
+                        throw err(rn, "patches." + e.key + ".release must be a Java version (8 or later)");
+                    }
+                    release = bd.intValue();
+                }
+                po.put(e.key, new PatchOptions(List.copyOf(pd), release));
+            }
+        }
+        this.patches = pf;
+        this.patchOptions = po;
         for (String h : hooks.keySet()) {
             if (!h.matches("(pre|post)(build|test|install|start)(:[A-Za-z0-9_-]+)?")) {
                 throw err(root.get("hooks").get(h), "unknown hook \"" + h + "\" (expected e.g. prebuild, postbuild:release, pretest)");
