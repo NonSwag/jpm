@@ -37,7 +37,7 @@ public final class Main {
               start [entry] [-- args]     Build, then run main with production env variables
               dev [entry] [-- args]       Run main with development env variables, restarting on changes
               test [filter...]            Run tests on the JUnit Platform
-              run <script> [args]         Run a script from the manifest
+              run <script> [args]         Run a script from the manifest; <module>:<script> for another module's
               clean                       Delete build output
 
             Dependencies

@@ -33,8 +33,13 @@ public final class Project {
             return manifest.name;
         }
 
-        /** Lockstep by default: a module without its own version uses the workspace version. */
+        /**
+         * Lockstep by default: a module without its own version uses the workspace version.
+         * {@code JPM_VERSION_OVERRIDE} replaces every module's version, for versions only CI computes.
+         */
         public String version() {
+            String override = versionOverride();
+            if (override != null) return override;
             if (manifest.version != null) return manifest.version;
             if (project.root.version != null) return project.root.version;
             return "0.0.0";
@@ -70,6 +75,12 @@ public final class Project {
         public String toString() {
             return name();
         }
+    }
+
+    /** {@code JPM_VERSION_OVERRIDE}, or null. */
+    public static String versionOverride() {
+        String v = System.getenv("JPM_VERSION_OVERRIDE");
+        return v == null || v.isBlank() ? null : v.trim();
     }
 
     public final Path dir;

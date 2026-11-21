@@ -87,7 +87,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |
 | `build`, `start`, `test`, `clean` | Build into `dist/`, run main with production env, run tests, delete output |
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
-| `run <script> [args]` | Run a script from `scripts` (no shorthand) |
+| `run [<module>:]<script> [args]` | Run a script from `scripts` (no shorthand); `<module>:<script>` runs a workspace module's script from anywhere in the workspace |
 | `patch <dep>`, `patch --commit <dep>` | Patch a dependency |
 | `upgrade [version]` | Upgrade jpm itself to the latest release (`--check` only reports, `--canary` installs the newest build of the main branch) |
 | `help`, `--version` | Show the commands, or jpm's version |
@@ -203,6 +203,8 @@ Other fields:
 - `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
 - `javacArgs`, `nativeArgs` (extra flags for javac and native-image); `-J` entries in `javacArgs`
   go to the JVM running javac, e.g. the `-J--add-exports=jdk.compiler/...=ALL-UNNAMED` ErrorProne needs
+- `filter`: resources copied with `${NAME}` replaced by define values (and the module's `NAME`, `VERSION`),
+  e.g. `"filter": ["app.properties"]`
 - `description`, `license`, `url` (used by publishing)
 - `extensions`: settings for extensions, by name, e.g. `"extensions": { "publish": { ... } }`; jpm passes
   them through untouched (`jpm info --json`)
@@ -447,6 +449,7 @@ jar and is picked up by native-image automatically.
 | `JPM_MAVEN_CENTRAL`, `JPM_FOOJAY_URL` | Mirrors for Maven Central and the JDK index |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy for downloads (any case), unless the `https.proxyHost` / `http.proxyHost` system properties set one |
 | `SSL_CERT_FILE`, `SSL_CERT_DIR` | Extra trusted certificates (PEM), e.g. a proxy's CA; without them the system bundle (`/etc/ssl/certs/ca-certificates.crt` and the like) is added to the built-in ones |
+| `JPM_VERSION_OVERRIDE` | Every module's version, e.g. one CI computes for publishing |
 | `JPM_GIT_BASE_GITHUB` (`_GITLAB`, `_CODEBERG`) | Redirect a Git host, e.g. to a mirror or `file:///…` for tests |
 | `JPM_VERSION`, `JPM_NO_MODIFY_PATH`, `JPM_NO_SHIMS` | Install scripts: version, skip the PATH change, skip the shims |
 | `JPM_REPO`, `JPM_INSTALL_BASE` | Install scripts and `jpm upgrade`: another GitHub repository, or another download location |

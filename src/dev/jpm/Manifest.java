@@ -27,7 +27,7 @@ public final class Manifest {
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
             "define", "scripts", "hooks", "patches", "workspace", "visibility", "isolated", "repositories", "defineClass",
-            "javacArgs", "nativeArgs", "layout", "sources", "resources", "relocate", "package", "description", "license", "url", "extensions", "$schema");
+            "javacArgs", "nativeArgs", "layout", "sources", "resources", "filter", "relocate", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
         RUNTIME("runtime"), DEV("dev"), TEST("test");
@@ -94,6 +94,8 @@ public final class Manifest {
     public final List<String> javacArgs;
     public final List<String> nativeArgs;
     public final Layout layout;
+    /** Resources (globs relative to the resource folder) copied with ${NAME} replaced by define values. */
+    public final List<String> filter;
     /** Source folders relative to the module, replacing the layout's one; empty for the layout's. */
     public final List<String> sources;
     /** Resource folders relative to the module, replacing the layout's one; empty for the layout's. */
@@ -272,6 +274,7 @@ public final class Manifest {
         String layoutName = str("layout", false);
         this.layout = layoutName == null && parent != null ? parent.layout : Layout.named(layoutName);
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
+        this.filter = stringList("filter");
         this.sources = folders("sources");
         this.resources = folders("resources");
         this.relocate = stringMap("relocate");

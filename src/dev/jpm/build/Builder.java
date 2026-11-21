@@ -242,7 +242,8 @@ public final class Builder {
             boolean ran = Compiler.compile(new Compiler.Request(m.name(), jdk, release, roots, cp, proc,
                     classesDir(m), m.cacheDir().resolve("classes.state.json"), m.manifest.javacArgs, key,
                     m.assetsDirs()));
-            Resources.sync(m.assetsDirs(), classesDir(m), m.cacheDir().resolve("resources.list"));
+            Resources.sync(m.assetsDirs(), classesDir(m), m.cacheDir().resolve("resources.list"),
+                    m.manifest.filter, filterValues(m));
             if (ran) Log.step("Compiled", m.name() + " " + m.version() + Log.dim(" (" + jdk.id() + ", release " + release + ")"));
             compiledModules.put(m.name(), ran);
             return ran;
@@ -273,15 +274,25 @@ public final class Builder {
         return jar;
     }
 
-    /**
-     * Writes the module's generated sources (the defines class) and returns their folder, or null if the
-     * module has none.
-     */
+    /** What {@code "filter"}ed resources can use: the module's define values, NAME and VERSION. */
+    private Map<String, String> filterValues(Project.Module m) {
+        if (m.manifest.filter.isEmpty()) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        out.put("NAME", m.name());
+        out.put("VERSION", m.version());
+        for (Defines.Value v : Defines.resolve(m.manifest, null, null, null, env)) out.put(v.name(), String.valueOf(v.value()));
+        return out;
+    }
+
     /** A module's define values, resolved from the manifest, the environment and .env files. */
     public List<Defines.Value> defineValues(Project.Module m) {
         return Defines.resolve(m.manifest, null, null, null, env);
     }
 
+    /**
+     * Writes the module's generated sources (the defines class) and returns their folder, or null if the
+     * module has none.
+     */
     public Path generateSources(Project.Module m) {
         List<Defines.Value> defs = defineValues(m);
         Path gen = m.cacheDir().resolve("generated");
