@@ -229,6 +229,7 @@ final class Commands {
     }
 
     private String latestSpec(MavenRepo repo, DepKey key) {
+        if (key.isGradle()) return dev.jpm.resolve.GradleDist.latest();
         if (key.isMaven()) {
             List<Version> all = repo.versions(key.group(), key.artifact());
             Version best = null;
@@ -453,7 +454,10 @@ final class Commands {
                 Graph.Pkg pkg = c.graph.get(d.key().toString());
                 if (pkg == null) continue;
                 String latest, wanted;
-                if (d.key().isMaven()) {
+                if (d.key().isGradle()) {
+                    latest = latestSpec(c.repo, d.key());
+                    wanted = d.spec();
+                } else if (d.key().isMaven()) {
                     List<Version> all = c.repo.versions(d.key().group(), d.key().artifact());
                     latest = latestSpec(c.repo, d.key());
                     Optional<Version> w = VersionSpecs.parse(d.spec()).best(all);
@@ -822,7 +826,7 @@ final class Commands {
                     d.put("jar", b.jarPath(sib).toString());
                 } else {
                     boolean patched = b.isPatched(p.id);
-                    d.put("kind", patched ? "patched" : p.kind == Graph.Kind.GIT ? "git" : "maven");
+                    d.put("kind", patched ? "patched" : p.kind == Graph.Kind.GIT ? "git" : p.kind == Graph.Kind.GRADLE ? "gradle" : "maven");
                     d.put("version", p.version);
                     if (p.kind == Graph.Kind.MAVEN) {
                         d.put("group", p.group());
@@ -968,6 +972,7 @@ final class Commands {
             }
             if (ide) {
                 mod.put("testDir", m.testDir().toString());
+                mod.put("testDirs", m.testDirs().stream().map(Path::toString).toList());
                 mod.put("testResourceDir", m.testResourcesDir().toString());
                 mod.put("excludeDirs", List.of(m.dir.resolve(".cache").toString(), m.dir.resolve("dist").toString()));
                 mod.put("scripts", new ArrayList<>(mf.scripts.keySet()));

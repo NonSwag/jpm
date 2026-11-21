@@ -12,12 +12,13 @@ import java.util.Locale;
  *       such as {@code natives-linux}</li>
  *   <li>{@code github:user/repo} or {@code github:user/repo/module} — Git (also {@code gitlab:}, {@code codeberg:})</li>
  *   <li>{@code workspace:module} — a sibling module in the same workspace</li>
+ *   <li>{@code gradle:api} — the Gradle API, from a Gradle distribution, for Gradle plugins</li>
  * </ul>
  */
 public record DepKey(Kind kind, String host, String group, String artifact, String module) implements Comparable<DepKey> {
     // `module` is the Git module, or the Maven classifier.
 
-    public enum Kind { MAVEN, GIT, WORKSPACE }
+    public enum Kind { MAVEN, GIT, WORKSPACE, GRADLE }
 
     public static DepKey parse(String s) {
         s = s.trim();
@@ -33,6 +34,13 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
                 }
                 String repo = parts[1].endsWith(".git") ? parts[1].substring(0, parts[1].length() - 4) : parts[1];
                 return new DepKey(Kind.GIT, prefix, parts[0], repo, parts.length == 3 ? parts[2] : null);
+            }
+            case "gradle" -> {
+                if (!rest.equals("api")) {
+                    throw new JpmException("Invalid Gradle dependency \"" + s + "\": the only one is gradle:api, the Gradle API of a"
+                            + " Gradle distribution (the version is the Gradle version)");
+                }
+                return new DepKey(Kind.GRADLE, null, null, "api", null);
             }
             case "workspace" -> {
                 if (rest.isEmpty() || rest.contains(":")) throw new JpmException("Invalid workspace dependency \"" + s + "\"");
@@ -67,6 +75,7 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
     public boolean isGit() { return kind == Kind.GIT; }
     public boolean isMaven() { return kind == Kind.MAVEN; }
     public boolean isWorkspace() { return kind == Kind.WORKSPACE; }
+    public boolean isGradle() { return kind == Kind.GRADLE; }
 
     /** The repository part of a Git key without the module, e.g. {@code github:user/repo}. */
     public DepKey repoKey() {
@@ -96,6 +105,7 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
             case MAVEN -> group;
             case GIT -> "git." + host + "." + group.toLowerCase(Locale.ROOT) + "." + artifact.toLowerCase(Locale.ROOT);
             case WORKSPACE -> "workspace";
+            case GRADLE -> "gradle";
         };
     }
 
@@ -103,7 +113,7 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
         return switch (kind) {
             case MAVEN -> artifact;
             case GIT -> module != null ? module : artifact;
-            case WORKSPACE -> artifact;
+            case WORKSPACE, GRADLE -> artifact;
         };
     }
 
@@ -113,6 +123,7 @@ public record DepKey(Kind kind, String host, String group, String artifact, Stri
             case MAVEN -> group + ":" + artifact + (module != null ? ":" + module : "");
             case GIT -> host + ":" + group + "/" + artifact + (module != null ? "/" + module : "");
             case WORKSPACE -> "workspace:" + artifact;
+            case GRADLE -> "gradle:" + artifact;
         };
     }
 
