@@ -175,12 +175,44 @@
     },
     "patches": {
       "type": "object",
-      "description": "Patch files applied to the sources of a dependency, which is then rebuilt: dependency key to the path of a .patch file.",
+      "description": "Patch files applied to the sources of a dependency, which is then rebuilt: dependency key to the path of a .patch file, or to an object with the file and options.",
       "propertyNames": {
         "$ref": "#/definitions/dependencyKey"
       },
       "additionalProperties": {
-        "type": "string"
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "file"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "The .patch file."
+              },
+              "dependencies": {
+                "type": "object",
+                "description": "Compile-only dependencies of the patched classes, resolved with the project; never added to anyone's runtime classpath.",
+                "propertyNames": {
+                  "$ref": "#/definitions/dependencyKey"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "release": {
+                "type": "integer",
+                "minimum": 8,
+                "description": "Java version to compile the patched classes for; default: the library's own bytecode level. Not lower than it."
+              }
+            }
+          }
+        ]
       }
     },
     "workspace": {
@@ -190,6 +222,11 @@
         "type": "string"
       },
       "uniqueItems": true
+    },
+    "isolated": {
+      "type": "boolean",
+      "default": false,
+      "description": "A workspace module resolved in a graph of its own (its own section of project.lock): its dependencies never change the versions other modules get. Meant for tooling and code generators; no module can depend on it, and it cannot depend on workspace modules."
     },
     "visibility": {
       "enum": [

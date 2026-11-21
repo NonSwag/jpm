@@ -53,7 +53,7 @@ public record GitModule(DepKey key, String commit, Manifest root, Manifest manif
             for (String rel : root.workspace) {
                 String text = read.apply(rel);
                 if (text == null) throw new JpmException(key.repoKey() + ": workspace module \"" + rel + "\" has no " + Manifest.FILE);
-                Manifest m = Manifest.parse(Path.of(key.repoKey() + "@" + commit.substring(0, 7), rel, Manifest.FILE), text);
+                Manifest m = Manifest.parse(Path.of(key.repoKey() + "@" + commit.substring(0, 7), rel, Manifest.FILE), text, root);
                 siblings.put(m.name, rel);
                 manifests.put(m.name, m);
             }

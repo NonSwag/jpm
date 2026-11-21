@@ -10,6 +10,7 @@ import dev.jpm.util.Log;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +33,14 @@ public final class Install {
         if (fresh) {
             graph = lock.graph;
             Resolver.addLocal(graph, project);
+            for (Project.Module m : project.isolatedModules()) {
+                Graph iso = graph.isolated.get(m.name());
+                if (iso == null) {
+                    throw new JpmException(Manifest.LOCK + " has no section for the isolated module " + m.name() + ". Run `jpm install`.");
+                }
+                Resolver.addLocal(iso, project.isolatedView(m));
+            }
+            graph.isolated.keySet().retainAll(project.isolatedModules().stream().map(Project.Module::name).toList());
         } else {
             if (o.frozen()) {
                 throw new JpmException(lock == null ? Manifest.LOCK + " is missing and --frozen was given"
@@ -41,12 +50,25 @@ public final class Install {
             if (o.updateAll()) repo.setRefreshMetadata(true);
             Graph prev = lock == null ? null : lock.graph;
             graph = new Resolver(project, repo, prev, o.update(), o.updateAll()).resolve();
+            // isolated modules: each resolved on its own, pinned by its own section of the lockfile
+            for (Project.Module m : project.isolatedModules()) {
+                Graph before = prev == null ? null : prev.isolated.get(m.name());
+                graph.isolated.put(m.name(), new Resolver(project.isolatedView(m), repo, before, o.update(), o.updateAll()).resolve());
+            }
         }
         fetch(graph, repo);
+        for (Graph iso : graph.isolated.values()) fetch(iso, repo);
         Lockfile out = new Lockfile(inputs, graph);
         if (!fresh || !out.render().equals(lock == null ? null : lock.render())) {
             out.write(lockPath);
-            if (!fresh) report(lock == null ? null : lock.graph, graph);
+            if (!fresh) {
+                report(lock == null ? null : lock.graph, graph);
+                for (Map.Entry<String, Graph> e : graph.isolated.entrySet()) {
+                    Graph before = lock == null ? null : lock.graph.isolated.get(e.getKey());
+                    Log.info(Log.dim("  isolated " + e.getKey() + ":"));
+                    report(before, e.getValue());
+                }
+            }
         }
         return graph;
     }
