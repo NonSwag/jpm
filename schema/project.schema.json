@@ -259,6 +259,13 @@
         "type": "string"
       }
     },
+    "relocate": {
+      "type": "object",
+      "description": "Packages moved to new names in the flat bundle (like Shadow's relocation): package to new package, e.g. {\"org.yaml.snakeyaml\": \"com.example.shaded.snakeyaml\"}. Classes, descriptors, string constants naming classes, and service files are rewritten.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "layout": {
       "enum": [
         "jpm",
