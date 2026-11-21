@@ -1,7 +1,11 @@
 package dev.jpm.build;
 
+import dev.jpm.DepKey;
 import dev.jpm.Manifest;
 import dev.jpm.Project;
+import dev.jpm.resolve.Graph;
+import dev.jpm.resolve.Install;
+import dev.jpm.resolve.Resolver;
 import dev.jpm.toolchain.Jdk;
 import dev.jpm.util.Exec;
 import dev.jpm.util.JpmException;
@@ -21,7 +25,8 @@ import java.util.Set;
  * built-in steps.
  *
  * <p>A {@code .java} script runs directly on the source launcher (JBang-style) with the project's runtime
- * classpath and build information in {@code JPM_*} environment variables. A {@code .sh} script runs with
+ * classpath, the dependencies it declares in {@code //DEPS} lines, and build information in {@code JPM_*}
+ * environment variables. A {@code .sh} script runs with
  * {@code sh}; anything else is a shell command line. Shell scripts are not guaranteed to work on every
  * platform.
  */
@@ -52,10 +57,13 @@ public final class Scripts {
             Jdk jdk = b.jdk(m.manifest);
             if (jdk.major() < 11) throw new JpmException("Java scripts need JDK 11 or newer");
             cmd.add(jdk.java());
+            // the script's own //DEPS come first, then the module's runtime classpath
+            List<Path> own = scriptClasspath(b, file);
             String cp = env.get("JPM_CLASSPATH");
-            if (cp != null && !cp.isEmpty()) {
+            String all = own.isEmpty() ? cp : Compiler.join(own) + (cp == null || cp.isEmpty() ? "" : java.io.File.pathSeparator + cp);
+            if (all != null && !all.isEmpty()) {
                 cmd.add("-cp");
-                cmd.add(cp);
+                cmd.add(all);
             }
             cmd.add(file.toString());
         } else if (value.endsWith(".sh") && Files.exists(file)) {
@@ -76,9 +84,69 @@ public final class Scripts {
         return Exec.inherit(m.dir, cmd, env);
     }
 
+    /**
+     * The dependencies a {@code .java} script declares itself, JBang-style, in {@code //DEPS} lines before
+     * its first declaration: {@code //DEPS group:artifact:version} (several per line, separated by spaces or
+     * commas; {@code group:artifact@version} works too).
+     */
+    static List<String> declaredDeps(String source) {
+        List<String> out = new ArrayList<>();
+        for (String line : source.split("\r?\n")) {
+            String t = line.strip();
+            if (t.startsWith("//DEPS")) {
+                for (String d : t.substring(6).split("[\\s,]+")) if (!d.isBlank()) out.add(d);
+                continue;
+            }
+            if (t.startsWith("package ") || t.startsWith("import ") || t.matches("(public |final |abstract )*(class|interface|record|enum|void) .*")) break;
+        }
+        return out;
+    }
+
+    /**
+     * The jars of a script's {@code //DEPS}: resolved in a graph of their own, so a script's tools never
+     * change the versions the project gets.
+     */
+    static List<Path> scriptClasspath(Builder b, Path script) {
+        List<String> deps = declaredDeps(dev.jpm.util.Fs.read(script));
+        if (deps.isEmpty()) return List.of();
+        List<Resolver.Root> roots = new ArrayList<>();
+        for (String d : deps) {
+            int at = d.lastIndexOf('@');
+            String key, version;
+            if (at > 0) {
+                key = d.substring(0, at);
+                version = d.substring(at + 1);
+            } else {
+                int c = d.lastIndexOf(':');
+                if (c <= 0 || d.indexOf(':') == c) {
+                    throw new JpmException(script.getFileName() + ": //DEPS " + d + " needs a version: group:artifact:version");
+                }
+                key = d.substring(0, c);
+                version = d.substring(c + 1);
+            }
+            DepKey k = DepKey.parse(key);
+            if (!k.isMaven()) throw new JpmException(script.getFileName() + ": //DEPS takes Maven dependencies, not " + d);
+            roots.add(new Resolver.Root("script " + script.getFileName(), k, version));
+        }
+        Graph g = new Resolver(roots, b.repo, null).resolve();
+        Install.fetch(g, b.repo);
+        List<Graph.Edge> edges = roots.stream().map(r -> new Graph.Edge(Resolver.idOf(r.key()), false, Set.of())).toList();
+        List<Path> out = new ArrayList<>();
+        for (String id : g.closure(edges, Graph.Walk.RUNTIME)) {
+            Graph.Pkg p = g.get(id);
+            if (p != null && p.kind == Graph.Kind.MAVEN && p.hasJar) {
+                out.add(b.repo.require(p.group(), p.name(), p.version, p.classifier(), "jar"));
+            }
+        }
+        return out;
+    }
+
     /** Build information passed to scripts and extensions. */
     public static Map<String, String> info(Builder b, Project.Module m) {
         Map<String, String> env = new LinkedHashMap<>();
+        // so scripts and hooks can call back into this jpm (jpm info --json, jpm build <module>)
+        env.put("JPM_EXE", dev.jpm.util.Self.exe());
+        env.put("JPM_VERSION_OF_JPM", dev.jpm.BuildConfig.VERSION);
         env.put("JPM_PROJECT_DIR", b.project.dir.toString());
         env.put("JPM_MODULE_DIR", m.dir.toString());
         env.put("JPM_NAME", m.name());

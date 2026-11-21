@@ -83,7 +83,7 @@ CI (`.github/workflows/ci.yml`) runs the tests and builds and smoke-tests the na
 | `install [--frozen]` | Resolve and write `project.lock`; `--frozen` fails if the lock is stale (CI) |
 | `update [dep…] [--latest]` | Re-resolve within ranges; `--latest` rewrites the manifest past them. `update -g [name…]` updates global extensions |
 | `outdated`, `why <dep>` | Inspect the graph |
-| `info [--json]` | Describe the project: modules, versions, folders, dependencies; `--json` is a stable format for extensions, `--ide` adds test folders, scripts and scoped dependencies with sources (used by the IntelliJ plugin) |
+| `info [--json]` | Describe the project: modules, versions, folders, dependencies; `--json` is a stable format for extensions, `--ide` adds test folders, scripts and scoped dependencies with sources (used by the IntelliJ plugin), `--classpath` adds every classpath (compile, processor, runtime, testCompile, testRuntime) as packages with coordinates, kind, jars and edges, and the resolved defines, without downloading sources |
 | `import [dir]` | Create `project.jsonc` from a Maven or Gradle build (`--dry-run`, `--static`, `--force`) |
 | `build`, `start`, `test`, `clean` | Build into `dist/`, run main with production env, run tests, delete output |
 | `dev [entry]` | Run main with development env, restarting when sources, assets, manifest or env files change |
@@ -199,9 +199,10 @@ Other fields:
   (set by `jpm import`)
 - `sources`, `resources`: several source or resource folders, replacing the layout's, e.g.
   `"sources": ["src/main/java", "src/generated/java"]` for committed generated code
-- `group`; `visibility` (`public`/`internal`, workspaces); `workspace` (module list, on a workspace root)
+- `group`; `visibility` (`public`/`internal`, workspaces); `isolated` (a workspace module with its own resolution); `workspace` (module list, on a workspace root)
 - `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
-- `javacArgs`, `nativeArgs` (extra flags for javac and native-image)
+- `javacArgs`, `nativeArgs` (extra flags for javac and native-image); `-J` entries in `javacArgs`
+  go to the JVM running javac, e.g. the `-J--add-exports=jdk.compiler/...=ALL-UNNAMED` ErrorProne needs
 - `description`, `license`, `url` (used by publishing)
 - `extensions`: settings for extensions, by name, e.g. `"extensions": { "publish": { ... } }`; jpm passes
   them through untouched (`jpm info --json`)
@@ -264,10 +265,15 @@ for Git, a SHA-256 for Maven jars (verified on every install), and its edges. It
 the declared dependencies are unchanged.
 
 **Workspaces.** A root `project.jsonc` with `"workspace": ["api", "impl"]`. Modules depend on each
-other with `"workspace:impl": "*"`, share one version (lockstep) and one lockfile. Outside projects can
+other with `"workspace:impl": "*"`, share one version (lockstep) and one lockfile. Modules inherit
+`java`, `target`, `group`, `license`, `url` and `layout` from the root unless they set them, and the
+root's `javacArgs` and `nativeArgs` come before their own; `repositories` are read from the root only. Outside projects can
 depend only on `public` modules; an `internal` module pulled in by a public one goes on the runtime
 classpath but never the compile classpath, and always comes from the same commit as the module that
-pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own.
+pulls it in. Prefixed tags (`api/v1.2.0`) version a module on its own. A module with `"isolated": true` is
+resolved in a graph of its own (its own section of `project.lock`), so its dependencies never change
+the versions the other modules get: for linters, formatters and code generators. Nothing can depend
+on an isolated module, and it cannot depend on workspace modules.
 
 **Builds** call the selected JDK's `javac`, with `--release` only when it is newer than the module's
 target (so an API added later is a compile error, not a runtime crash). On a JDK of the target version
@@ -291,16 +297,23 @@ already set in the process environment win over all files, so CI secrets are nev
 **Patches.** `jpm patch <dep>` unpacks the Git checkout or the Maven sources jar into
 `.cache/patch/<name>` as a Git repo; `jpm patch --commit <dep>` writes the diff to `patches/` and
 records it in the manifest. Git dependencies are patched before they are built. For Maven jars only the
-changed classes are recompiled and swapped in. If a patch no longer applies, the build fails.
+changed classes are recompiled and swapped in. If a patch no longer applies, the build fails. A patch
+can also be an object, `{ "file": "patches/x.patch", "dependencies": { "net.kyori:adventure-api": "5.2.0" },
+"release": 25 }`: `dependencies` are compile-only for the patched classes (resolved and locked with the
+project, never on anyone's classpath), and `release` compiles them for a newer Java than the library's
+own bytecode level. Modular jars are patched as their module (`--patch-module`), so a patch can change
+`module-info.java` and use package-private members.
 
 **Tests** run on the JUnit Platform console launcher matching the resolved platform version; any
 platform engine works. `jpm test com.example.FooTest`, `jpm test 'com.example.*'` or
 `jpm test 'com.example.FooTest#bar'` select tests.
 
 **Scripts** run with `jpm run <name>`. `.java` scripts run on the source launcher with the runtime
-classpath; `.sh` scripts with `sh`; anything else as a shell command. Scripts and extensions get
+classpath, plus the dependencies they declare JBang-style before their first declaration
+(`//DEPS com.google.code.gson:gson:2.11.0`), which are resolved on their own and never move the project's; `.sh` scripts with `sh`; anything else as a shell command. Scripts and extensions get
 `JPM_PROJECT_DIR`, `JPM_MODULE_DIR`, `JPM_NAME`, `JPM_VERSION`, `JPM_MANIFEST`, `JPM_CLASSES_DIR`,
-`JPM_CLASSPATH`, `JPM_JAR` (after a build) and `JPM_JAVA_HOME`; extensions also get `JPM_CONFIG`.
+`JPM_CLASSPATH`, `JPM_JAR` (after a build), `JPM_JAVA_HOME`, and `JPM_EXE` and `JPM_VERSION_OF_JPM` to
+call back into the jpm running them; extensions also get `JPM_CONFIG`.
 Hooks are `pre`/`post` + `build`/`test`/`start`, optionally with `:<profile>` (`build --release` is
 profile `release`).
 
@@ -429,6 +442,8 @@ jar and is picked up by native-image automatically.
 | `JPM_JVM_ARGS` | JVM options for `jpm start` and `jpm dev` |
 | `JPM_BUNDLE_CACHE` | Where bundles unpack their nested jars (default: the temp directory) |
 | `JPM_MAVEN_CENTRAL`, `JPM_FOOJAY_URL` | Mirrors for Maven Central and the JDK index |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Proxy for downloads (any case), unless the `https.proxyHost` / `http.proxyHost` system properties set one |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | Extra trusted certificates (PEM), e.g. a proxy's CA; without them the system bundle (`/etc/ssl/certs/ca-certificates.crt` and the like) is added to the built-in ones |
 | `JPM_GIT_BASE_GITHUB` (`_GITLAB`, `_CODEBERG`) | Redirect a Git host, e.g. to a mirror or `file:///…` for tests |
 | `JPM_VERSION`, `JPM_NO_MODIFY_PATH`, `JPM_NO_SHIMS` | Install scripts: version, skip the PATH change, skip the shims |
 | `JPM_REPO`, `JPM_INSTALL_BASE` | Install scripts and `jpm upgrade`: another GitHub repository, or another download location |

@@ -272,11 +272,19 @@ public final class Compiler {
             args.add("-s");
             args.add(gen.toString());
         }
-        args.addAll(r.extraArgs);
+        // -J options are for the JVM running javac (ErrorProne needs --add-exports there); javac refuses
+        // them inside an argfile, so they go on the command line before it.
+        List<String> command = new ArrayList<>();
+        command.add(r.jdk.javac());
+        for (String a : r.extraArgs) {
+            if (a.startsWith("-J")) command.add(a);
+            else args.add(a);
+        }
         for (Path f : files) args.add(f.toString());
         Path argFile = r.stateFile.resolveSibling(r.outDir.getFileName() + ".args");
         Fs.write(argFile, String.join("\n", args.stream().map(Compiler::argQuote).toList()) + "\n");
-        Exec.Result res = Exec.capture(null, List.of(r.jdk.javac(), "@" + argFile));
+        command.add("@" + argFile);
+        Exec.Result res = Exec.capture(null, command);
         String out = (res.out() + res.err()).strip();
         if (!res.ok()) {
             Fs.deleteTree(tmp);

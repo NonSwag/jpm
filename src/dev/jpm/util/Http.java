@@ -3,7 +3,6 @@ package dev.jpm.util;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,7 +15,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.HexFormat;
 
-/** HTTP downloads through the system proxy settings. */
+/** HTTP downloads through the proxy and trust settings of {@link Net}. */
 public final class Http {
     private Http() {}
 
@@ -24,11 +23,7 @@ public final class Http {
 
     public static synchronized HttpClient client() {
         if (client == null) {
-            client = HttpClient.newBuilder()
-                    .followRedirects(HttpClient.Redirect.NORMAL)
-                    .proxy(ProxySelector.getDefault())
-                    .connectTimeout(Duration.ofSeconds(20))
-                    .build();
+            client = Net.client(Duration.ofSeconds(20)).build();
         }
         return client;
     }

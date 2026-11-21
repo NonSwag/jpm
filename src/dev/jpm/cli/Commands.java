@@ -48,7 +48,16 @@ import java.util.Set;
 
 /** Implementations of the CLI commands. */
 final class Commands {
-    private final Path cwd = Path.of("").toAbsolutePath();
+    private final Path cwd;
+
+    Commands() {
+        this(Path.of("").toAbsolutePath());
+    }
+
+    /** For tests: commands run as if started in {@code cwd}. */
+    Commands(Path cwd) {
+        this.cwd = cwd;
+    }
 
     // ---------------------------------------------------------------- helpers
 
@@ -534,18 +543,19 @@ final class Commands {
         Project.Module rootMod = c.project.rootModule();
         if (all) Scripts.hooks(b, rootMod, c.project.root, "pre", "build", profile, Env.Mode.PRODUCTION);
         for (Project.Module m : mods) {
-            Scripts.hooks(b, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
-            b.jar(m);
+            Builder mb = b.forModule(m);
+            Scripts.hooks(mb, m, m.manifest, "pre", "build", profile, Env.Mode.PRODUCTION);
+            mb.jar(m);
             if (bundleFlag || flat || m.manifest.packaging.equals("bundle")) {
                 // a runnable jar-in-jar for apps; one flat jar for modules without a main (plugins) or with --flat
-                if (flat || m.manifest.mains.isEmpty()) b.flatBundle(m);
-                else b.bundle(m);
+                if (flat || m.manifest.mains.isEmpty()) mb.flatBundle(m);
+                else mb.bundle(m);
             }
             if (nativeImage) {
-                if (!m.manifest.mains.isEmpty()) b.nativeImage(m, null);
+                if (!m.manifest.mains.isEmpty()) mb.nativeImage(m, null);
                 else if (mods.size() == 1) throw new JpmException(m.manifest.file + " has no \"main\" to build natively");
             }
-            Scripts.hooks(b, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
+            Scripts.hooks(mb, m, m.manifest, "post", "build", profile, Env.Mode.PRODUCTION);
         }
         if (all) Scripts.hooks(b, rootMod, c.project.root, "post", "build", profile, Env.Mode.PRODUCTION);
         return 0;
@@ -562,7 +572,7 @@ final class Commands {
         if (!dev) {
             Ctx c = open(false);
             Project.Module m = single(c.project, "run");
-            Builder b = c.builder(mode);
+            Builder b = c.builder(mode).forModule(m);
             Scripts.hooks(b, m, m.manifest, "pre", "start", null, mode);
             List<String> cmd = javaCommand(b, m, entry, appArgs, trace);
             int code = Exec.inherit(m.dir, cmd, Env.forChild(c.project.dir, mode));
@@ -682,10 +692,11 @@ final class Commands {
         List<Project.Module> mods = module != null ? targets(c.project, List.of(module)) : targets(c.project, List.of());
         int worst = 0;
         for (Project.Module m : mods) {
-            Scripts.hooks(b, m, m.manifest, "pre", "test", null, Env.Mode.DEVELOPMENT);
-            int code = TestRunner.run(b, m, args);
+            Builder mb = b.forModule(m);
+            Scripts.hooks(mb, m, m.manifest, "pre", "test", null, Env.Mode.DEVELOPMENT);
+            int code = TestRunner.run(mb, m, args);
             if (code != 0) worst = code;
-            else Scripts.hooks(b, m, m.manifest, "post", "test", null, Env.Mode.DEVELOPMENT);
+            else Scripts.hooks(mb, m, m.manifest, "post", "test", null, Env.Mode.DEVELOPMENT);
         }
         return worst;
     }
@@ -710,7 +721,7 @@ final class Commands {
         if (m == null || (!m.manifest.scripts.containsKey(name) && c.project.root.scripts.containsKey(name))) {
             m = c.project.rootModule();
         }
-        Builder b = c.builder(Env.Mode.DEVELOPMENT);
+        Builder b = c.builder(Env.Mode.DEVELOPMENT).forModule(m);
         return Scripts.run(b, m, name, args, Env.Mode.DEVELOPMENT);
     }
 
@@ -730,20 +741,21 @@ final class Commands {
      * compile and run), provided (compile only: dev dependencies), runtime (run only) and test.
      */
     private List<Object> ideDependencies(Ctx c, Builder b, Project.Module m) {
+        Graph graph = b.graph;
         List<Graph.Edge> runtime = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
         List<Graph.Edge> devOnly = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.DEV);
         List<Graph.Edge> test = dev.jpm.resolve.Resolver.rootEdges(m, Manifest.Scope.TEST);
         Map<String, String> scopes = new LinkedHashMap<>();
-        for (String id : c.graph.closure(runtime, Graph.Walk.COMPILE)) scopes.putIfAbsent(id, "compile");
-        for (String id : c.graph.closure(runtime, Graph.Walk.RUNTIME)) scopes.putIfAbsent(id, "runtime");
-        for (String id : c.graph.closure(devOnly, Graph.Walk.ALL)) {
+        for (String id : graph.closure(runtime, Graph.Walk.COMPILE)) scopes.putIfAbsent(id, "compile");
+        for (String id : graph.closure(runtime, Graph.Walk.RUNTIME)) scopes.putIfAbsent(id, "runtime");
+        for (String id : graph.closure(devOnly, Graph.Walk.ALL)) {
             if ("runtime".equals(scopes.get(id))) scopes.put(id, "compile");
             else scopes.putIfAbsent(id, "provided");
         }
-        for (String id : c.graph.closure(test, Graph.Walk.ALL)) scopes.putIfAbsent(id, "test");
+        for (String id : graph.closure(test, Graph.Walk.ALL)) scopes.putIfAbsent(id, "test");
         List<Object> out = new ArrayList<>();
         for (Map.Entry<String, String> e : scopes.entrySet()) {
-            Graph.Pkg p = c.graph.get(e.getKey());
+            Graph.Pkg p = graph.get(e.getKey());
             if (p == null) continue;
             Map<String, Object> d = new LinkedHashMap<>();
             d.put("id", p.id);
@@ -772,9 +784,85 @@ final class Commands {
     }
 
     /**
+     * {@code --classpath}: each of a module's classpaths (compile, processor, runtime, testCompile,
+     * testRuntime) as packages in classpath order. A package has its id, kind (maven, git, patched or
+     * workspace), version, Maven coordinates, its jars (for workspace modules, their classes directory and
+     * jar) and its dependency edges as in project.lock. No sources jars are
+     * downloaded.
+     */
+    private Map<String, Object> classpaths(Ctx c, Builder b, Project.Module m) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Builder.Cp cp : Builder.Cp.values()) {
+            String name = switch (cp) {
+                case COMPILE -> "compile";
+                case PROCESSOR -> "processor";
+                case RUNTIME -> "runtime";
+                case TEST_COMPILE -> "testCompile";
+                case TEST_RUNTIME -> "testRuntime";
+            };
+            List<Object> pkgs = new ArrayList<>();
+            for (String id : b.classpathIds(m, cp)) {
+                Graph.Pkg p = c.graph.get(id);
+                if (p == null) continue;
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("id", p.id);
+                if (p.kind == Graph.Kind.LOCAL) {
+                    Project.Module sib = c.project.module(p.id.substring("workspace:".length()));
+                    d.put("kind", "workspace");
+                    d.put("module", sib.name());
+                    if (sib.manifest.group != null) d.put("group", sib.manifest.group);
+                    d.put("artifact", sib.name());
+                    d.put("version", sib.version());
+                    d.put("classes", Builder.classesDir(sib).toString());
+                    d.put("jar", b.jarPath(sib).toString());
+                } else {
+                    boolean patched = b.isPatched(p.id);
+                    d.put("kind", patched ? "patched" : p.kind == Graph.Kind.GIT ? "git" : "maven");
+                    d.put("version", p.version);
+                    if (p.kind == Graph.Kind.MAVEN) {
+                        d.put("group", p.group());
+                        d.put("artifact", p.name());
+                        if (p.classifier() != null) d.put("classifier", p.classifier());
+                    } else {
+                        if (p.commit != null) d.put("commit", p.commit);
+                        if (p.tag != null) d.put("tag", p.tag);
+                    }
+                    List<String> jars = b.paths(p.id, m).stream().map(Path::toString).toList();
+                    d.put("jars", jars);
+                    if (jars.size() == 1) d.put("jar", jars.get(0));
+                }
+                List<Object> edges = new ArrayList<>();
+                for (Graph.Edge e : p.deps.values()) {
+                    Map<String, Object> ed = new LinkedHashMap<>();
+                    ed.put("id", e.target());
+                    ed.put("scope", e.compileOnly() ? "provided" : e.runtimeOnly() ? "runtime" : "compile");
+                    if (!e.exclusions().isEmpty()) ed.put("exclude", new ArrayList<>(new java.util.TreeSet<>(e.exclusions())));
+                    edges.add(ed);
+                }
+                d.put("dependencies", edges);
+                pkgs.add(d);
+            }
+            out.put(name, pkgs);
+        }
+        return out;
+    }
+
+    /** A module's resolved define values, by name (what its defines class holds). */
+    private static Map<String, Object> defines(Builder b, Project.Module m) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            for (dev.jpm.build.Defines.Value v : b.defineValues(m)) out.put(v.name(), v.value());
+        } catch (JpmException e) {
+            out.put("$error", e.getMessage());
+        }
+        return out;
+    }
+
+    /**
      * {@code jpm info --json}: the project as extensions see it. The output is a stable contract: fields are
      * only ever added. With {@code --classpath}, each module also lists its compile classpath (which may
-     * build Git dependencies first). With {@code --ide}, each module also lists its test folders, the folders
+     * build Git dependencies first), every classpath as packages with coordinates, jars and edges (see
+     * {@link #classpaths}), and its resolved define values. With {@code --ide}, each module also lists its test folders, the folders
      * an IDE should exclude, its scripts, the folder of its generated sources (written on the way, so the
      * defines class resolves without a build), and {@code ideDependencies}: every package on its classpaths with
      * the narrowest scope it is needed in, workspace modules as module references (nothing of the project is
@@ -798,9 +886,12 @@ final class Commands {
         out.put("extensions", c.project.root.extensions);
         if (ide) out.put("scripts", new ArrayList<>(c.project.root.scripts.keySet()));
         List<Object> modules = new ArrayList<>();
+        Builder shared = b;
         for (Project.Module m : c.project.buildOrder()) {
+            b = shared.forModule(m);
             Map<String, Object> mod = new LinkedHashMap<>();
             Manifest mf = m.manifest;
+            if (mf.isolated) mod.put("isolated", true);
             mod.put("name", m.name());
             if (mf.group != null) mod.put("group", mf.group);
             mod.put("version", m.version());
@@ -855,7 +946,7 @@ final class Commands {
                         }
                     }
                 }
-                Graph.Pkg p = c.graph.get(k.toString());
+                Graph.Pkg p = b.graph.get(k.toString());
                 if (p != null && p.kind != Graph.Kind.LOCAL) {
                     dep.put("resolved", p.version);
                     if (p.commit != null) dep.put("commit", p.commit);
@@ -866,6 +957,8 @@ final class Commands {
             mod.put("extensions", mf.extensions);
             if (withClasspath) {
                 mod.put("compileClasspath", b.classpath(m, Builder.Cp.COMPILE).stream().map(Path::toString).toList());
+                mod.put("classpaths", classpaths(c, b, m));
+                mod.put("defines", defines(b, m));
             }
             if (ide) {
                 mod.put("testDir", m.testDir().toString());
@@ -977,8 +1070,7 @@ final class Commands {
         }
         Map<String, String> env = new LinkedHashMap<>();
         // so the extension can call back into this jpm (jpm build, jpm info --json)
-        Path self = Shims.self();
-        env.put("JPM_EXE", self != null ? self.toString() : "jpm");
+        env.put("JPM_EXE", dev.jpm.util.Self.exe());
         env.put("JPM_VERSION_OF_JPM", Main.VERSION);
         try {
             Project p = Project.find(cwd);

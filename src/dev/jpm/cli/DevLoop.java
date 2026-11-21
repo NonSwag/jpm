@@ -53,7 +53,7 @@ final class DevLoop {
                     Graph g = Install.run(project, repo, new Install.Options(false, false, Set.of(), true));
                     Builder b = new Builder(project, g, repo, Env.Mode.DEVELOPMENT);
                     Project.Module m = commands.singleForRun(project);
-                    List<String> cmd = commands.javaCommand(b, m, entry, appArgs);
+                    List<String> cmd = commands.javaCommand(b.forModule(m), m, entry, appArgs);
                     proc = Exec.start(m.dir, cmd, Env.forChild(project.dir, Env.Mode.DEVELOPMENT));
                     Log.info(Log.dim("watching for changes (Ctrl+C to stop)"));
                 } catch (JpmException e) {

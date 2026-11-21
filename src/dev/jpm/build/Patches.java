@@ -126,7 +126,10 @@ public final class Patches {
         }
         String target = owner.patches.getOrDefault(id, rel);
         Fs.write(owner.dir().resolve(target), diff.out());
-        Fs.write(owner.file, JsoncEdit.set(src, List.of("patches"), id, Jsonc.quote(target)));
+        // a patch with options keeps them: only its "file" is written
+        Fs.write(owner.file, owner.patchOptions.containsKey(id)
+                ? JsoncEdit.set(src, List.of("patches", id), "file", Jsonc.quote(target))
+                : JsoncEdit.set(src, List.of("patches"), id, Jsonc.quote(target)));
         Fs.deleteTree(work);
         Log.step("Saved", target + " and recorded it in " + owner.dir().relativize(owner.file));
     }
