@@ -337,7 +337,10 @@ and runs as a named module, with nothing to configure:
 For a module without a `main`, such as a plugin that a server loads, or with `jpm build --flat`, the bundle
 is one flat jar instead: the module's classes and resources with those of every runtime dependency merged
 in, the first copy of a file winning except service files (`META-INF/services/*`), which are joined. `dev`
-dependencies stay out, as the platform provides them. Nothing is relocated.
+dependencies stay out, as the platform provides them. `"relocate": { "org.yaml.snakeyaml": "com.example.shaded.snakeyaml" }`
+moves packages to new names in it, as Shadow does: class references, descriptors, string constants naming
+classes or resources, multi-release entries and service files are rewritten (names computed at run time are
+not).
 
 For a module with a `main`, `jpm build --bundle` (or `"package": "bundle"`) writes `dist/<name>-<version>-bundle.jar`, which runs
 with `java -jar`. Nothing is shaded: the app and every dependency stay untouched jars inside it.
