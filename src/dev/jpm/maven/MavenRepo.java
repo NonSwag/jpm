@@ -36,7 +36,8 @@ public final class MavenRepo {
 
     public MavenRepo(List<String> extra) {
         List<String> r = new ArrayList<>();
-        String central = System.getenv("JPM_MAVEN_CENTRAL");
+        // the jpm.mavenCentral system property (tests) or JPM_MAVEN_CENTRAL replaces Maven Central
+        String central = System.getProperty("jpm.mavenCentral", System.getenv("JPM_MAVEN_CENTRAL"));
         r.add(central != null && !central.isBlank() ? slash(central) : CENTRAL);
         for (String e : extra) r.add(slash(e));
         this.repos = r;
