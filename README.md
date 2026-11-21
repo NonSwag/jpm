@@ -197,6 +197,8 @@ Other fields:
 - `package`: `"jar"` (the default) or `"bundle"`, see [Bundles](#bundles-jar-in-jar-isolation)
 - `layout`: `"maven"` for `src/main/java`, `src/main/resources`, `src/test/java`, `src/test/resources`
   (set by `jpm import`)
+- `sources`, `resources`: several source or resource folders, replacing the layout's, e.g.
+  `"sources": ["src/main/java", "src/generated/java"]` for committed generated code
 - `group`; `visibility` (`public`/`internal`, workspaces); `isolated` (a workspace module with its own resolution); `workspace` (module list, on a workspace root)
 - `repositories` (extra Maven repositories); `defineClass` (name of the generated class)
 - `javacArgs`, `nativeArgs` (extra flags for javac and native-image); `-J` entries in `javacArgs`
