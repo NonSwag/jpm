@@ -266,6 +266,13 @@
       },
       "description": "Resources (globs relative to the resource folder, e.g. \"*.properties\") copied with each ${NAME} replaced by the define value NAME; NAME and VERSION are the module's."
     },
+    "relocate": {
+      "type": "object",
+      "description": "Packages moved to new names in the flat bundle (like Shadow's relocation): package to new package, e.g. {\"org.yaml.snakeyaml\": \"com.example.shaded.snakeyaml\"}. Classes, descriptors, string constants naming classes, and service files are rewritten.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "layout": {
       "enum": [
         "jpm",

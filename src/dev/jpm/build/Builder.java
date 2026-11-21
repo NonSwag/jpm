@@ -415,14 +415,14 @@ public final class Builder {
         attrs.put("Implementation-Title", m.name());
         attrs.put("Implementation-Version", m.version());
         Path out = m.dir.resolve("dist").resolve(m.name() + "-" + m.version() + "-bundle.jar");
-        Hash key = new Hash().add("flat-v1").add(attrs.toString());
+        Hash key = new Hash().add("flat-v1").add(attrs.toString()).add(new java.util.TreeMap<>(m.manifest.relocate).toString());
         for (Path in : inputs) key.add(in.getFileName().toString()).add(Files.isDirectory(in) ? treeKey(List.of(in)) : Hash.sha256(in));
         Path stamp = m.cacheDir().resolve("bundle.key");
         if (Files.exists(out) && Files.exists(stamp) && Fs.read(stamp).equals(key.hex())) {
             Log.step("Up to date", m.dir.relativize(out) + Log.dim(" (" + (inputs.size() - 1) + " dependencies merged)"));
             return out;
         }
-        int entries = Jars.merge(out, inputs, attrs);
+        int entries = Jars.merge(out, inputs, attrs, new Relocator(m.manifest.relocate));
         Fs.write(stamp, key.hex());
         Log.step("Bundled", m.dir.relativize(out) + Log.dim(" (flat: " + (inputs.size() - 1) + " dependencies merged, " + entries + " files)"));
         return out;

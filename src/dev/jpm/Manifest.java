@@ -27,7 +27,7 @@ public final class Manifest {
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
             "define", "scripts", "hooks", "patches", "workspace", "visibility", "isolated", "repositories", "defineClass",
-            "javacArgs", "nativeArgs", "layout", "filter", "package", "description", "license", "url", "extensions", "$schema");
+            "javacArgs", "nativeArgs", "layout", "filter", "relocate", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
         RUNTIME("runtime"), DEV("dev"), TEST("test");
@@ -96,6 +96,8 @@ public final class Manifest {
     public final Layout layout;
     /** Resources (globs relative to the resource folder) copied with ${NAME} replaced by define values. */
     public final List<String> filter;
+    /** Packages moved to new names in flat bundles (Shadow's relocation): package to new package. */
+    public final Map<String, String> relocate;
     /** What `jpm build` produces: "jar" (default) or "bundle" (jar-in-jar with isolated modules). */
     public final String packaging;
     public final String description;
@@ -269,6 +271,12 @@ public final class Manifest {
         this.layout = layoutName == null && parent != null ? parent.layout : Layout.named(layoutName);
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
         this.filter = stringList("filter");
+        this.relocate = stringMap("relocate");
+        for (Map.Entry<String, String> e : relocate.entrySet()) {
+            if (!e.getKey().matches("[\\w$]+(\\.[\\w$]+)*") || !e.getValue().matches("[\\w$]+(\\.[\\w$]+)*")) {
+                throw err(root.get("relocate"), "relocate maps a package to a package, e.g. \"org.yaml.snakeyaml\": \"my.shaded.snakeyaml\"");
+            }
+        }
     }
 
     private static String inherit(String own, String fromRoot) {
