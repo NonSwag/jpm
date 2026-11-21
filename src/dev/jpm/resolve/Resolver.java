@@ -78,11 +78,22 @@ public final class Resolver {
     public Resolver(Project project, MavenRepo repo, Graph previous, Set<String> unlocked, boolean unlockAll) {
         this.project = project;
         this.roots = new ArrayList<>();
-        for (Project.Module m : project.modules) {
+        // isolated modules are resolved on their own, see Install
+        for (Project.Module m : project.sharedModules()) {
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 if (d.key().isWorkspace()) continue;
                 validateSpec(d);
                 roots.add(new Root(m.id(), d.key(), d.spec(), d.exclusions()));
+            }
+        }
+        // compile-only dependencies of patches: resolved with the project, so their versions agree with it
+        // and are locked, but on no module's classpath (only the patched classes are compiled against them)
+        for (Map.Entry<String, Manifest> e : patchManifests(project).entrySet()) {
+            for (Manifest.PatchOptions o : e.getValue().patchOptions.values()) {
+                for (Manifest.Dependency d : o.dependencies()) {
+                    validateSpec(d);
+                    roots.add(new Root(e.getKey(), d.key(), d.spec(), d.exclusions()));
+                }
             }
         }
         this.repo = repo;
@@ -90,6 +101,14 @@ public final class Resolver {
         this.previous = previous;
         this.unlocked = unlocked;
         this.unlockAll = unlockAll;
+    }
+
+    /** The manifests that may hold patches, by the id their patch dependencies are requested from. */
+    private static Map<String, Manifest> patchManifests(Project project) {
+        Map<String, Manifest> out = new LinkedHashMap<>();
+        if (project.root.isWorkspaceRoot()) out.put("workspace root", project.root);
+        for (Project.Module m : project.modules) out.put(m.id(), m.manifest);
+        return out;
     }
 
     /** Resolves explicit roots without a project (tools, a dependency's own build dependencies). */
@@ -124,9 +143,16 @@ public final class Resolver {
         Hash h = new Hash().add("v1");
         for (String r : project.root.repositories) h.add("repo " + r);
         for (Project.Module m : project.modules) {
-            h.add("module " + m.name());
+            h.add("module " + m.name() + (m.manifest.isolated ? " isolated" : ""));
             for (Manifest.Dependency d : effectiveDeps(m)) {
                 h.add(d.scope().key + " " + d.key() + " " + d.spec() + " " + d.exclusions() + (d.runtimeOnly() ? " rt" : ""));
+            }
+        }
+        for (Map.Entry<String, Manifest> e : patchManifests(project).entrySet()) {
+            for (Map.Entry<String, Manifest.PatchOptions> po : e.getValue().patchOptions.entrySet()) {
+                for (Manifest.Dependency d : po.getValue().dependencies()) {
+                    h.add("patch " + e.getKey() + " " + po.getKey() + " " + d.key() + " " + d.spec() + " " + d.exclusions());
+                }
             }
         }
         return h.hex().substring(0, 32);
@@ -245,7 +271,7 @@ public final class Resolver {
 
     /** Adds LOCAL packages for the project's own modules so classpaths can be walked through them. */
     public static void addLocal(Graph g, Project project) {
-        for (Project.Module m : project.modules) {
+        for (Project.Module m : project.sharedModules()) {
             Graph.Pkg p = new Graph.Pkg(m.id(), Graph.Kind.LOCAL);
             p.version = m.version();
             p.dir = m.dir;

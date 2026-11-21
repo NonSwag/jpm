@@ -155,6 +155,43 @@ class BuildTest {
         assertFalse(Files.exists(dir.resolve("classes/p/A.class")));
     }
 
+    /**
+     * "-J" entries in javacArgs reach the JVM that runs javac (ErrorProne needs --add-exports there); javac
+     * refuses them inside an argfile. An annotation processor running inside javac checks the property.
+     */
+    @Test
+    void jvmOptionsReachTheJavacProcess(@TempDir Path dir) throws Exception {
+        Jdk jdk = Toolchain.require(JavaSpec.any());
+        Path procSrc = dir.resolve("proc-src");
+        Fs.write(procSrc.resolve("proc/Check.java"), """
+                package proc;
+                import java.util.Set;
+                import javax.annotation.processing.*;
+                import javax.lang.model.SourceVersion;
+                import javax.lang.model.element.TypeElement;
+                @SupportedAnnotationTypes("*")
+                public class Check extends AbstractProcessor {
+                    @Override public SourceVersion getSupportedSourceVersion() { return SourceVersion.latestSupported(); }
+                    @Override public boolean process(Set<? extends TypeElement> a, RoundEnvironment env) {
+                        if (!"yes".equals(System.getProperty("jpm.test.marker"))) {
+                            processingEnv.getMessager().printMessage(javax.tools.Diagnostic.Kind.ERROR, "no -J option");
+                        }
+                        return false;
+                    }
+                }
+                """);
+        Fs.write(procSrc.resolve("META-INF/services/javax.annotation.processing.Processor"), "proc.Check\n");
+        Path proc = dir.resolve("proc");
+        assertEquals(0, javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d", proc.toString(),
+                procSrc.resolve("proc/Check.java").toString()));
+        Fs.write(proc.resolve("META-INF/services/javax.annotation.processing.Processor"), "proc.Check\n");
+        Fs.write(dir.resolve("src/p/A.java"), "package p; public class A { }");
+        assertTrue(Compiler.compile(new Compiler.Request("t", jdk, jdk.major(), List.of(dir.resolve("src")), List.of(), List.of(proc),
+                dir.resolve("classes"), dir.resolve("state.json"), List.of("-J-Djpm.test.marker=yes", "-Xlint:all"), "k")));
+        assertTrue(Files.exists(dir.resolve("classes/p/A.class")));
+        assertFalse(Fs.read(dir.resolve("classes.args")).contains("-J"), "javac refuses -J in an argfile");
+    }
+
     private static final List<String> EXPORT_JAVAC_TREE =
             List.of("--add-exports", "jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED");
 

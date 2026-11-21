@@ -26,7 +26,7 @@ public final class Manifest {
     public static final String SCHEMA_URL = "https://github.com/java-package-manager/jpm/releases/latest/download/project.schema.json";
     /** Every top-level field jpm reads. schema/project.schema.json describes the same set (SchemaTest checks). */
     public static final Set<String> FIELDS = Set.of("name", "version", "group", "java", "target", "main", "runtime", "dev", "test",
-            "define", "scripts", "hooks", "patches", "workspace", "visibility", "repositories", "defineClass",
+            "define", "scripts", "hooks", "patches", "workspace", "visibility", "isolated", "repositories", "defineClass",
             "javacArgs", "nativeArgs", "layout", "package", "description", "license", "url", "extensions", "$schema");
 
     public enum Scope {
@@ -47,6 +47,13 @@ public final class Manifest {
      * {@code {"version": "...", "exclude": [...], "runtimeOnly": true}}. {@code api}: a dev dependency that
      * consumers compile against too (Gradle's compileOnlyApi); never at run time.
      */
+    /**
+     * Options of a patch: {@code dependencies} are compile-only for the patched classes (resolved with the
+     * project, never on anyone's runtime classpath); {@code release} compiles them for a newer Java than
+     * the library's own bytecode level.
+     */
+    public record PatchOptions(List<Dependency> dependencies, Integer release) {}
+
     public record Dependency(DepKey key, String spec, Scope scope, int line, Set<String> exclusions, boolean runtimeOnly, boolean api) {
         public Dependency(DepKey key, String spec, Scope scope, int line) {
             this(key, spec, scope, line, Set.of(), false, false);
@@ -74,9 +81,14 @@ public final class Manifest {
     public final Map<String, Map<String, Object>> libraryDefines;
     public final Map<String, String> scripts;
     public final Map<String, String> hooks;
+    /** Patched dependency to its patch file. */
     public final Map<String, String> patches;
+    /** Patched dependency to the options of its patch (a patch given as an object); absent for a plain path. */
+    public final Map<String, PatchOptions> patchOptions;
     public final List<String> workspace;
     public final String visibility;
+    /** Resolved in its own graph, so its dependencies do not move the other modules' versions. */
+    public final boolean isolated;
     public final List<String> repositories;
     public final String defineClass;
     public final List<String> javacArgs;
@@ -90,7 +102,18 @@ public final class Manifest {
     /** Settings for extensions, by extension name (e.g. "publish"); jpm passes them through untouched. */
     public final Map<String, Object> extensions;
 
+    /**
+     * Fields a workspace module takes from the workspace root when it does not set them itself.
+     * {@code javacArgs} and {@code nativeArgs} are the root's followed by the module's own.
+     */
+    public static final List<String> INHERITED = List.of("java", "target", "group", "license", "url", "layout", "javacArgs", "nativeArgs");
+
     private Manifest(Path file, String source) {
+        this(file, source, null);
+    }
+
+    /** {@code parent}: the workspace root this module belongs to, whose settings it inherits; or null. */
+    private Manifest(Path file, String source, Manifest parent) {
         this.file = file;
         this.source = source;
         try {
@@ -110,13 +133,16 @@ public final class Manifest {
         this.name = str("name", true);
         if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]*")) throw err(root.get("name"), "invalid name \"" + name + "\"");
         this.version = str("version", false);
-        this.group = str("group", false);
-        this.java = str("java", false);
-        this.target = str("target", false);
+        this.group = inherit(str("group", false), parent == null ? null : parent.group);
+        this.java = inherit(str("java", false), parent == null ? null : parent.java);
+        this.target = inherit(str("target", false), parent == null ? null : parent.target);
         this.visibility = str("visibility", false) == null ? "public" : str("visibility", false);
         if (!visibility.equals("public") && !visibility.equals("internal")) {
             throw err(root.get("visibility"), "visibility must be \"public\" or \"internal\"");
         }
+        Jsonc.Node iso = root.get("isolated");
+        if (iso != null && !(iso.value instanceof Boolean)) throw err(iso, "isolated must be true or false");
+        this.isolated = iso != null && Boolean.TRUE.equals(iso.value);
         this.defineClass = str("defineClass", false);
 
         Map<String, String> m = new LinkedHashMap<>();
@@ -171,7 +197,53 @@ public final class Manifest {
 
         this.scripts = stringMap("scripts");
         this.hooks = stringMap("hooks");
-        this.patches = stringMap("patches");
+        Map<String, String> pf = new LinkedHashMap<>();
+        Map<String, PatchOptions> po = new LinkedHashMap<>();
+        Jsonc.Node pn = root.get("patches");
+        if (pn != null) {
+            if (!pn.isObject()) throw err(pn, "patches must be an object of dependency to patch file");
+            for (Jsonc.Member e : pn.members.values()) {
+                if (e.value.isString()) {
+                    pf.put(e.key, (String) e.value.value);
+                    continue;
+                }
+                if (!e.value.isObject()) {
+                    throw err(e.value, "patches." + e.key + " must be a patch file or {\"file\": ..., \"dependencies\": {...}, \"release\": N}");
+                }
+                for (String k : e.value.members.keySet()) {
+                    if (!Set.of("file", "dependencies", "release").contains(k)) throw err(e.value.get(k), "unknown patch option \"" + k + "\"");
+                }
+                Jsonc.Node f = e.value.get("file");
+                if (f == null || !f.isString()) throw err(e.value, "patches." + e.key + " needs a \"file\"");
+                pf.put(e.key, (String) f.value);
+                List<Dependency> pd = new ArrayList<>();
+                Jsonc.Node dn2 = e.value.get("dependencies");
+                if (dn2 != null) {
+                    if (!dn2.isObject()) throw err(dn2, "patches." + e.key + ".dependencies must be an object of dependency to version");
+                    for (Jsonc.Member d : dn2.members.values()) {
+                        DepKey key;
+                        try {
+                            key = DepKey.parse(d.key);
+                        } catch (JpmException ex) {
+                            throw new JpmException(file + ":" + line(d.keyStart) + ": " + ex.getMessage());
+                        }
+                        if (key.isWorkspace()) throw err(d.value, "patch dependencies cannot be workspace modules");
+                        pd.add(dependency(key, d, Scope.DEV));
+                    }
+                }
+                Integer release = null;
+                Jsonc.Node rn = e.value.get("release");
+                if (rn != null) {
+                    if (!(rn.value instanceof BigDecimal bd) || bd.scale() > 0 || bd.intValue() < 8) {
+                        throw err(rn, "patches." + e.key + ".release must be a Java version (8 or later)");
+                    }
+                    release = bd.intValue();
+                }
+                po.put(e.key, new PatchOptions(List.copyOf(pd), release));
+            }
+        }
+        this.patches = pf;
+        this.patchOptions = po;
         for (String h : hooks.keySet()) {
             if (!h.matches("(pre|post)(build|test|install|start)(:[A-Za-z0-9_-]+)?")) {
                 throw err(root.get("hooks").get(h), "unknown hook \"" + h + "\" (expected e.g. prebuild, postbuild:release, pretest)");
@@ -179,20 +251,33 @@ public final class Manifest {
         }
         this.workspace = stringList("workspace");
         this.repositories = stringList("repositories");
-        this.javacArgs = stringList("javacArgs");
-        this.nativeArgs = stringList("nativeArgs");
+        this.javacArgs = parent == null ? stringList("javacArgs") : concat(parent.javacArgs, stringList("javacArgs"));
+        this.nativeArgs = parent == null ? stringList("nativeArgs") : concat(parent.nativeArgs, stringList("nativeArgs"));
         this.packaging = str("package", false) == null ? "jar" : str("package", false);
         this.description = str("description", false);
-        this.license = str("license", false);
-        this.url = str("url", false);
+        this.license = inherit(str("license", false), parent == null ? null : parent.license);
+        this.url = inherit(str("url", false), parent == null ? null : parent.url);
         Jsonc.Node ext = root.get("extensions");
         if (ext != null && !ext.isObject()) throw err(ext, "extensions must be an object of extension name to its settings");
         @SuppressWarnings("unchecked")
         Map<String, Object> extMap = ext == null ? Map.of() : (Map<String, Object>) ext.value;
         this.extensions = extMap;
         if (!packaging.equals("jar") && !packaging.equals("bundle")) throw err(root.get("package"), "package must be \"jar\" or \"bundle\"");
-        this.layout = Layout.named(str("layout", false));
+        String layoutName = str("layout", false);
+        this.layout = layoutName == null && parent != null ? parent.layout : Layout.named(layoutName);
         if (layout == null) throw err(root.get("layout"), "layout must be \"jpm\" or \"maven\"");
+    }
+
+    private static String inherit(String own, String fromRoot) {
+        return own != null ? own : fromRoot;
+    }
+
+    private static List<String> concat(List<String> a, List<String> b) {
+        if (a.isEmpty()) return b;
+        if (b.isEmpty()) return a;
+        List<String> out = new ArrayList<>(a);
+        out.addAll(b);
+        return List.copyOf(out);
     }
 
     private Dependency dependency(DepKey key, Jsonc.Member e, Scope s) {
@@ -271,6 +356,17 @@ public final class Manifest {
 
     public static Manifest parse(Path file, String source) {
         return new Manifest(file, source);
+    }
+
+    /** A workspace module's manifest, with the settings it inherits from {@code root} (see {@link #INHERITED}). */
+    public static Manifest parse(Path file, String source, Manifest root) {
+        return new Manifest(file, source, root);
+    }
+
+    /** Loads a workspace module's manifest, with the settings it inherits from {@code root}. */
+    public static Manifest load(Path dir, Manifest root) {
+        Manifest plain = load(dir);
+        return root == null ? plain : new Manifest(plain.file, plain.source, root);
     }
 
     public Path dir() {
