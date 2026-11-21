@@ -83,10 +83,18 @@ public final class Project {
     public final Manifest root;
     public final List<Module> modules;
 
+    /** True for {@link #isolatedView}: the one module is resolved on its own. */
+    private final boolean view;
+
     private Project(Path dir, Manifest root, List<Module> modules) {
+        this(dir, root, modules, false);
+    }
+
+    private Project(Path dir, Manifest root, List<Module> modules, boolean view) {
         this.dir = dir;
         this.root = root;
         this.modules = modules;
+        this.view = view;
     }
 
     /** Loads the project whose root is exactly {@code dir}. */
@@ -102,7 +110,7 @@ public final class Project {
                 if (!Files.exists(md.resolve(Manifest.FILE))) {
                     throw new JpmException(root.file + ": workspace module \"" + rel + "\" has no " + Manifest.FILE);
                 }
-                Manifest m = Manifest.load(md);
+                Manifest m = Manifest.load(md, root);
                 if (m.isWorkspaceRoot()) throw new JpmException(m.file + ": nested workspaces are not supported");
                 modules.add(new Module(p, md, m));
             }
@@ -118,12 +126,46 @@ public final class Project {
         }
         for (Module m : modules) {
             for (Manifest.Dependency d : m.manifest.dependencies) {
-                if (d.key().isWorkspace() && p.module(d.key().artifact()) == null) {
+                if (!d.key().isWorkspace()) continue;
+                Module target = p.module(d.key().artifact());
+                if (target == null) {
                     throw new JpmException(m.manifest.file + ":" + d.line() + ": no workspace module named \"" + d.key().artifact() + "\"");
+                }
+                if (m.manifest.isolated) {
+                    throw new JpmException(m.manifest.file + ":" + d.line() + ": an isolated module cannot depend on workspace modules"
+                            + " (it is resolved in a graph of its own)");
+                }
+                if (target.manifest.isolated) {
+                    throw new JpmException(m.manifest.file + ":" + d.line() + ": " + target.name() + " is isolated, so no module can depend on it");
                 }
             }
         }
+        if (root.isWorkspaceRoot() && root.isolated) throw new JpmException(root.file + ": \"isolated\" applies to workspace modules, not the root");
         return p;
+    }
+
+    /** The modules resolved in a graph of their own ({@code "isolated": true}). */
+    public List<Module> isolatedModules() {
+        if (view) return List.of();
+        return modules.stream().filter(m -> m.manifest.isolated && root.isWorkspaceRoot()).toList();
+    }
+
+    /** The modules resolved together in the workspace graph. */
+    public List<Module> sharedModules() {
+        if (view) return modules;
+        return modules.stream().filter(m -> !(m.manifest.isolated && root.isWorkspaceRoot())).toList();
+    }
+
+    /**
+     * A project holding only one isolated module of this workspace, with the workspace's root manifest:
+     * what that module is resolved and built as.
+     */
+    public Project isolatedView(Module m) {
+        if (this.view) return this;
+        List<Module> one = new ArrayList<>();
+        Project view = new Project(dir, root, one, true);
+        one.add(new Module(view, m.dir, m.manifest));
+        return view;
     }
 
     /**

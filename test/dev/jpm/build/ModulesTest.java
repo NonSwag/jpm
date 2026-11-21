@@ -52,6 +52,50 @@ class ModulesTest {
         assertEquals(List.of(plain), split.get(1));
     }
 
+    /**
+     * A module-info.class from a newer Java than the one jpm runs on still names its module: the native
+     * binary is built with an older JDK than the code it compiles.
+     */
+    @Test
+    void readsModuleDescriptorsOfAnyClassFileVersion(@TempDir Path dir) throws Exception {
+        Path src = dir.resolve("src");
+        Fs.write(src.resolve("module-info.java"), """
+                module fr.fidorial.example {
+                    requires java.sql;
+                    exports fr.fidorial.example;
+                }
+                """);
+        Fs.write(src.resolve("fr/fidorial/example/A.java"), "package fr.fidorial.example; public class A { long l = 1L; double d = 2.0; }");
+        Path out = dir.resolve("classes");
+        int rc = javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null, "-d", out.toString(),
+                src.resolve("module-info.java").toString(), src.resolve("fr/fidorial/example/A.java").toString());
+        assertEquals(0, rc);
+        byte[] compiled = Files.readAllBytes(out.resolve("module-info.class"));
+        assertEquals("fr.fidorial.example", Modules.moduleNameFromBytes(compiled));
+        for (int major : new int[] {69, 100}) {
+            byte[] newer = compiled.clone();
+            newer[6] = (byte) (major >> 8);
+            newer[7] = (byte) major;
+            assertEquals("fr.fidorial.example", Modules.moduleNameFromBytes(newer), "class file " + major);
+            // as a classes directory (a workspace module) and in a jar
+            Path classes = dir.resolve("classes-" + major);
+            Files.createDirectories(classes);
+            Files.write(classes.resolve("module-info.class"), newer);
+            assertEquals("fr.fidorial.example", Modules.declaredName(classes));
+            Path jar = dir.resolve("example-" + major + ".jar");
+            Manifest mf = new Manifest();
+            mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+            try (JarOutputStream jo = new JarOutputStream(Files.newOutputStream(jar), mf)) {
+                jo.putNextEntry(new java.util.zip.ZipEntry("module-info.class"));
+                jo.write(newer);
+                jo.closeEntry();
+            }
+            assertEquals("fr.fidorial.example", Modules.declaredName(jar));
+        }
+        assertNull(Modules.moduleNameFromBytes(new byte[] {(byte) 0xCA, (byte) 0xFE}));
+        assertNull(Modules.moduleNameFromBytes(Files.readAllBytes(out.resolve("fr/fidorial/example/A.class"))));
+    }
+
     private static Path jar(Path p, String automaticName) throws Exception {
         Manifest mf = new Manifest();
         mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");

@@ -46,12 +46,26 @@ public final class Builder {
     private final Map<String, List<Path>> artifacts = new HashMap<>();
     private final Set<String> building = new LinkedHashSet<>();
     private final Map<String, Boolean> compiledModules = new HashMap<>();
+    private final Env.Mode mode;
+    private final Map<String, Builder> isolatedBuilders = new HashMap<>();
 
     public Builder(Project project, Graph graph, MavenRepo repo, Env.Mode mode) {
         this.project = project;
         this.graph = graph;
         this.repo = repo;
+        this.mode = mode;
         this.env = Env.load(project.dir, mode);
+    }
+
+    /**
+     * The builder for a module: this one, or for an isolated module ({@code "isolated": true}) one over
+     * its own graph, so its classpaths come from its own resolution.
+     */
+    public Builder forModule(Project.Module m) {
+        if (!m.manifest.isolated) return this;
+        Graph iso = graph.isolated.get(m.name());
+        if (iso == null) return this; // already an isolated module's builder, or a project that is not a workspace
+        return isolatedBuilders.computeIfAbsent(m.name(), n -> new Builder(project.isolatedView(m), iso, repo, mode));
     }
 
     public Map<String, String> env() {
@@ -122,6 +136,13 @@ public final class Builder {
     // ---------------------------------------------------------------- classpaths
 
     public List<Path> classpath(Project.Module m, Cp kind) {
+        List<Path> out = new ArrayList<>();
+        for (String id : classpathIds(m, kind)) out.addAll(paths(id, m));
+        return Compiler.distinct(out);
+    }
+
+    /** The packages on one of a module's classpaths, in classpath order, without fetching or building any. */
+    public List<String> classpathIds(Project.Module m, Cp kind) {
         List<Graph.Edge> runtime = Resolver.rootEdges(m, Manifest.Scope.RUNTIME);
         List<Graph.Edge> dev = Resolver.rootEdges(m, Manifest.Scope.DEV);
         List<Graph.Edge> test = Resolver.rootEdges(m, Manifest.Scope.TEST);
@@ -145,9 +166,12 @@ public final class Builder {
                 ids.addAll(graph.closure(test, Graph.Walk.RUNTIME));
             }
         }
-        List<Path> out = new ArrayList<>();
-        for (String id : new LinkedHashSet<>(ids)) out.addAll(paths(id, m));
-        return Compiler.distinct(out);
+        return new ArrayList<>(new LinkedHashSet<>(ids));
+    }
+
+    /** Whether a manifest of the project patches this package. */
+    public boolean isPatched(String id) {
+        return patchOwner(id) != null;
     }
 
     /** Runtime dependency classpath without compiling the project's own modules (for scripts). */
@@ -250,10 +274,6 @@ public final class Builder {
         return jar;
     }
 
-    /**
-     * Writes the module's generated sources (the defines class) and returns their folder, or null if the
-     * module has none.
-     */
     /** What {@code "filter"}ed resources can use: the module's define values, NAME and VERSION. */
     private Map<String, String> filterValues(Project.Module m) {
         if (m.manifest.filter.isEmpty()) return Map.of();
@@ -264,8 +284,17 @@ public final class Builder {
         return out;
     }
 
+    /** A module's define values, resolved from the manifest, the environment and .env files. */
+    public List<Defines.Value> defineValues(Project.Module m) {
+        return Defines.resolve(m.manifest, null, null, null, env);
+    }
+
+    /**
+     * Writes the module's generated sources (the defines class) and returns their folder, or null if the
+     * module has none.
+     */
     public Path generateSources(Project.Module m) {
-        List<Defines.Value> defs = Defines.resolve(m.manifest, null, null, null, env);
+        List<Defines.Value> defs = defineValues(m);
         Path gen = m.cacheDir().resolve("generated");
         if (defs.isEmpty() && m.manifest.defineClass == null) {
             Fs.deleteTree(gen);
@@ -527,7 +556,23 @@ public final class Builder {
         if (owner == null) return jar;
         Path patch = owner.dir().resolve(owner.patches.get(p.id));
         if (!Files.exists(patch)) throw new JpmException(owner.file + ": patch file " + owner.patches.get(p.id) + " for " + p.id + " does not exist");
-        String key = new Hash().add(Hash.sha256(jar)).add(Hash.sha256(Fs.read(patch))).hex().substring(0, 24);
+        Manifest.PatchOptions options = owner.patchOptions.get(p.id);
+        // the patch's own compile-only dependencies, from the project's graph
+        List<Path> patchDeps = new ArrayList<>();
+        if (options != null && !options.dependencies().isEmpty()) {
+            List<Graph.Edge> roots = new ArrayList<>();
+            for (Manifest.Dependency d : options.dependencies()) roots.add(new Graph.Edge(Resolver.idOf(d.key()), false, d.exclusions()));
+            for (String id : graph.closure(roots, Graph.Walk.ALL)) {
+                if (graph.get(id) == null) throw new JpmException("Patch dependency " + id + " of " + p.id + " is not resolved. Run `jpm install`.");
+                patchDeps.addAll(paths(id, consumer));
+            }
+        }
+        Hash keyHash = new Hash().add(Hash.sha256(jar)).add(Hash.sha256(Fs.read(patch)));
+        if (options != null) {
+            keyHash.add("release " + options.release());
+            for (Path d : patchDeps) keyHash.add(Files.isDirectory(d) ? d.toString() : Hash.sha256(d));
+        }
+        String key = keyHash.hex().substring(0, 24);
         Path out = Fs.home().resolve("patched").resolve(key).resolve(p.name() + "-" + p.version + (p.classifier() != null ? "-" + p.classifier() : "") + "-patched.jar");
         if (Files.exists(out)) return out;
         Log.step("Patching", p.id + " " + p.version);
@@ -560,12 +605,25 @@ public final class Builder {
         if (!javaFiles.isEmpty()) {
             // Recompile only the changed classes against the original jar and its dependencies.
             List<Graph.Edge> self = List.of(new Graph.Edge(p.id, false, Set.of()));
-            List<Path> cp = new ArrayList<>();
-            cp.add(jar);
-            // compiling: everything the patched package was compiled against
-            for (String id : graph.closure(self, Graph.Walk.ALL)) if (!id.equals(p.id)) cp.addAll(paths(id, consumer));
+            List<Path> deps = new ArrayList<>();
+            // compiling: everything the patched package was compiled against, and what the patch adds
+            for (String id : graph.closure(self, Graph.Walk.ALL)) if (!id.equals(p.id)) deps.addAll(paths(id, consumer));
+            deps.addAll(patchDeps);
+            deps = Compiler.distinct(deps);
             Jdk jdk = consumer != null ? jdk(consumer.manifest) : Toolchain.require(JavaSpec.any());
-            int release = Math.max(8, Math.min(jdk.major(), classRelease(jar)));
+            int own = classRelease(jar);
+            int release = Math.max(8, Math.min(jdk.major(), own));
+            if (options != null && options.release() != null) {
+                if (options.release() < own) {
+                    throw new JpmException(owner.file + ": patches." + p.id + ".release is " + options.release() + ", lower than "
+                            + p.id + "'s own bytecode level (" + own + ")");
+                }
+                if (options.release() > jdk.major()) {
+                    throw new JpmException(owner.file + ": patches." + p.id + ".release is " + options.release() + ", newer than the JDK "
+                            + jdk.id() + "; set \"java\" to " + options.release() + " or later");
+                }
+                release = options.release();
+            }
             Path srcRoot = out.getParent().resolve("changed");
             Fs.deleteTree(srcRoot);
             for (Path f : javaFiles) {
@@ -578,8 +636,42 @@ public final class Builder {
                     throw new JpmException(e.getMessage());
                 }
             }
-            Compiler.compile(new Compiler.Request("patch " + p.id, jdk, release, List.of(srcRoot), cp, List.of(), overlay,
-                    out.getParent().resolve("state.json"), List.of("-nowarn"), key));
+            // A modular jar: compile the changes as part of its module (--patch-module), so a changed
+            // module-info.java sees the module's packages and changed classes see their module's other
+            // classes, package-private ones included.
+            String module = jdk.major() >= 9 ? Modules.descriptorName(jar) : null;
+            List<Path> cp = new ArrayList<>();
+            List<String> extra = new ArrayList<>(List.of("-nowarn"));
+            if (module != null) {
+                extra.add("--patch-module");
+                extra.add(module + "=" + srcRoot + java.io.File.pathSeparator + jar);
+                if (Files.exists(srcRoot.resolve("module-info.java"))) {
+                    cp.addAll(deps); // the compiler places them from the patched module-info's requires
+                } else {
+                    List<Path> mp = new ArrayList<>();
+                    mp.add(jar);
+                    mp.addAll(deps);
+                    extra.add("--module-path");
+                    extra.add(Compiler.join(mp));
+                }
+            } else {
+                cp.add(jar);
+                cp.addAll(deps);
+            }
+            try {
+                Compiler.compile(new Compiler.Request("patch " + p.id, jdk, release, List.of(srcRoot), cp, List.of(), overlay,
+                        out.getParent().resolve("state.json"), extra, key));
+            } catch (JpmException e) {
+                String hint = options == null || options.dependencies().isEmpty()
+                        ? "\nIf the patched classes use other libraries, list them in the patch's \"dependencies\": "
+                        + "\"patches\": { \"" + p.id + "\": { \"file\": \"" + owner.patches.get(p.id) + "\", \"dependencies\": { ... } } }"
+                        : "";
+                String rel = (options == null || options.release() == null) && release < jdk.major()
+                        ? "\nThe patched classes are compiled for Java " + release + " (" + p.id + "'s own level); for newer language"
+                        + " features set the patch's \"release\"."
+                        : "";
+                throw new JpmException(e.getMessage() + hint + rel);
+            }
         }
         Jars.rewrite(jar, out, name -> {
             for (String d : dropPrefixes) {
