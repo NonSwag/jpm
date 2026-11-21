@@ -26,7 +26,7 @@ public final class Imported {
     /** Manifest text for a module, with a header saying where it came from. */
     public String render(String dir) {
         return "// Imported from " + tool + " by `jpm import`. Edit freely; jpm does not read the "
-                + (tool.equals("Maven") ? "pom.xml" : "Gradle build") + " any more.\n" + Jsonc.write(manifests.get(dir)) + "\n";
+                + (tool.equals("Maven") ? "pom.xml" : "Gradle build") + " anymore.\n" + Jsonc.write(manifests.get(dir)) + "\n";
     }
 
     /** Smallest LTS JDK that can compile for the given release (at least 17, so modern tools run). */
