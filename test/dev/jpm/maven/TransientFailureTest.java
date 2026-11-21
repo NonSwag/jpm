@@ -14,11 +14,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -27,29 +25,24 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** A rate limit, a server error or a refusal is not "not found": it is retried and never cached as missing. */
+/** A rate limit, a server error or a refusal is not "not found": it is reported, never retried, never cached as missing. */
 class TransientFailureTest {
     private final String oldHome = System.getProperty("jpm.home");
-    private final Consumer<Duration> oldSleeper = MavenRepo.sleeper;
-    private final List<Duration> waits = new ArrayList<>();
     private HttpServer server;
     private String base;
 
     /** Statuses the server answers in turn for every request; 200 serves "content". */
     private final List<Integer> statuses = new ArrayList<>();
     private final AtomicInteger requests = new AtomicInteger();
-    private String retryAfter;
 
     @BeforeEach
     void start(@TempDir Path tmp) throws IOException {
         System.setProperty("jpm.home", tmp.resolve("home").toString());
-        MavenRepo.sleeper = waits::add;
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/", ex -> {
             int i = requests.getAndIncrement();
             int status = statuses.isEmpty() ? 404 : statuses.get(Math.min(i, statuses.size() - 1));
             byte[] body = status == 200 ? "content".getBytes(StandardCharsets.UTF_8) : new byte[0];
-            if (retryAfter != null && status == 429) ex.getResponseHeaders().add("Retry-After", retryAfter);
             ex.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
             try (OutputStream out = ex.getResponseBody()) {
                 out.write(body);
@@ -62,7 +55,6 @@ class TransientFailureTest {
     @AfterEach
     void stop() {
         server.stop(0);
-        MavenRepo.sleeper = oldSleeper;
         if (oldHome == null) System.clearProperty("jpm.home"); else System.setProperty("jpm.home", oldHome);
     }
 
@@ -76,31 +68,13 @@ class TransientFailureTest {
     }
 
     @Test
-    void rateLimitIsRetriedHonouringRetryAfter() throws IOException {
-        statuses.addAll(List.of(429, 200));
-        retryAfter = "7";
-        MavenRepo r = repo();
-        Path p = r.require("g", "a", "1.0", null, "jar");
-        assertEquals("content", Files.readString(p));
-        assertEquals(List.of(Duration.ofSeconds(7)), waits);
-    }
-
-    @Test
-    void serverErrorsAreRetriedWithBackoff() throws IOException {
-        statuses.addAll(List.of(503, 502, 200));
-        Path p = repo().require("g", "a", "1.0", null, "jar");
-        assertEquals("content", Files.readString(p));
-        assertEquals(List.of(Duration.ofSeconds(1), Duration.ofSeconds(2)), waits);
-    }
-
-    @Test
-    void persistentRateLimitIsNotCachedAsMissing() {
+    void rateLimitIsNotRetriedNorCachedAsMissing() {
         statuses.add(429);
         MavenRepo r = repo();
         JpmException e = assertThrows(JpmException.class, () -> r.require("g", "a", "1.0", null, "jar"));
         assertTrue(e.getMessage().contains("HTTP 429"), e.getMessage());
         assertTrue(e.getMessage().contains("not a missing artifact"), e.getMessage());
-        assertEquals(MavenRepo.ATTEMPTS, requests.get());
+        assertEquals(1, requests.get(), "no retries");
         assertFalse(Files.exists(missing(r.local("g", "a", "1.0", null, "jar"))));
 
         // the next run asks again, and finds it
@@ -108,6 +82,16 @@ class TransientFailureTest {
         statuses.add(200);
         requests.set(0);
         assertNotNull(repo().fetch("g", "a", "1.0", null, "jar"));
+    }
+
+    @Test
+    void serverErrorIsNotRetriedNorCached() {
+        statuses.add(503);
+        MavenRepo r = repo();
+        JpmException e = assertThrows(JpmException.class, () -> r.require("g", "a", "1.0", null, "jar"));
+        assertTrue(e.getMessage().contains("HTTP 503"), e.getMessage());
+        assertEquals(1, requests.get(), "no retries");
+        assertFalse(Files.exists(missing(r.local("g", "a", "1.0", null, "jar"))));
     }
 
     @Test
@@ -128,13 +112,5 @@ class TransientFailureTest {
         JpmException e = assertThrows(JpmException.class, () -> r.require("g", "a", "1.0", null, "jar"));
         assertTrue(e.getMessage().startsWith("Could not find"), e.getMessage());
         assertEquals(1, requests.get(), "the second lookup is answered from the cache");
-    }
-
-    @Test
-    void retryAfterIsBounded() {
-        assertEquals(MavenRepo.MAX_WAIT, MavenRepo.backoff(0, "3600"));
-        assertEquals(Duration.ofSeconds(4), MavenRepo.backoff(2, null));
-        assertEquals(Duration.ofSeconds(1), MavenRepo.backoff(0, "soon"));
-        assertEquals(Duration.ZERO, MavenRepo.backoff(0, "Wed, 21 Oct 2015 07:28:00 GMT"));
     }
 }

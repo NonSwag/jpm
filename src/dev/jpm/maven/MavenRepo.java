@@ -234,39 +234,6 @@ public final class MavenRepo {
         static final Result ABSENT = new Result(false, null);
     }
 
-    /** Attempts per file for rate limits (429), server errors (5xx) and network errors. */
-    static final int ATTEMPTS = 4;
-    /** Longest wait between attempts, including one a Retry-After header asks for. */
-    static final Duration MAX_WAIT = Duration.ofSeconds(30);
-    /** Waits between attempts; tests replace it so they do not sleep. */
-    static java.util.function.Consumer<Duration> sleeper = d -> {
-        try {
-            Thread.sleep(d.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new JpmException("Interrupted");
-        }
-    };
-
-    /** The wait before attempt {@code attempt + 1}: Retry-After when the server sent one, else 1, 2, 4 s. */
-    static Duration backoff(int attempt, String retryAfter) {
-        Duration d = Duration.ofSeconds(1L << attempt);
-        if (retryAfter != null) {
-            try {
-                d = Duration.ofSeconds(Long.parseLong(retryAfter.trim()));
-            } catch (NumberFormatException e) {
-                try {
-                    d = Duration.between(java.time.Instant.now(),
-                            java.time.ZonedDateTime.parse(retryAfter.trim(), java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant());
-                } catch (java.time.format.DateTimeParseException ignored) {
-                    // not a date either: keep the default
-                }
-            }
-        }
-        if (d.isNegative()) d = Duration.ZERO;
-        return d.compareTo(MAX_WAIT) > 0 ? MAX_WAIT : d;
-    }
-
     private Result download(String url, Path target) {
         if (url.startsWith("file:")) {
             // local repositories: copy the file if it is there
@@ -284,46 +251,37 @@ public final class MavenRepo {
         }
         if (offline) return Result.ABSENT;
         Log.debug("GET " + url);
-        String problem = null;
-        String retryAfter = null;
-        for (int attempt = 0; attempt < ATTEMPTS; attempt++) {
-            if (attempt > 0) sleeper.accept(backoff(attempt - 1, retryAfter));
-            retryAfter = null;
-            try {
-                HttpRequest req = HttpRequest.newBuilder(URI.create(url))
-                        .timeout(Duration.ofMinutes(2))
-                        .header("User-Agent", "jpm")
-                        .GET().build();
-                HttpResponse<InputStream> resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-                int status = resp.statusCode();
-                if (status == 200) {
-                    Files.createDirectories(target.getParent());
-                    Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
-                    try (InputStream in = resp.body()) {
-                        Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-                    } catch (IOException e) {
-                        Files.deleteIfExists(tmp);
-                        throw e;
-                    }
-                    Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-                    return Result.FOUND;
+        // One request, no retries: a failure is reported, and not remembered as "missing", so the next run asks again.
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofMinutes(2))
+                    .header("User-Agent", "jpm")
+                    .GET().build();
+            HttpResponse<InputStream> resp = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
+            int status = resp.statusCode();
+            if (status == 200) {
+                Files.createDirectories(target.getParent());
+                Path tmp = Files.createTempFile(target.getParent(), target.getFileName().toString(), ".part");
+                try (InputStream in = resp.body()) {
+                    Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException e) {
+                    Files.deleteIfExists(tmp);
+                    throw e;
                 }
-                resp.body().close();
-                if (status == 404 || status == 410) return Result.ABSENT;
-                problem = url + " answered HTTP " + status;
-                // Refusals are not retried (they will not change), but not remembered as "missing" either:
-                // some repositories answer 401/403 for files they do not have, proxies for hosts they block.
-                if (status == 401 || status == 403) return new Result(false, problem);
-                if (status != 429 && status < 500) return new Result(false, problem);
-                retryAfter = resp.headers().firstValue("Retry-After").orElse(null);
-            } catch (IOException e) {
-                Log.debug("download failed: " + e);
-                problem = url + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new JpmException("Interrupted");
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                return Result.FOUND;
             }
+            resp.body().close();
+            if (status == 404 || status == 410) return Result.ABSENT;
+            // anything else (401/403, 429, 5xx) is not proof the file does not exist: some repositories answer
+            // 401/403 for files they do not have, proxies for hosts they block
+            return new Result(false, url + " answered HTTP " + status);
+        } catch (IOException e) {
+            Log.debug("download failed: " + e);
+            return new Result(false, url + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JpmException("Interrupted");
         }
-        return new Result(false, problem + " (after " + ATTEMPTS + " attempts)");
     }
 }
